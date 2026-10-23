@@ -57,8 +57,12 @@ Gộp từ 3 phiên chat (20–22/10/2026). Đọc file này + `project_summary.
   S210-p28 17 tấm 1 037,6 m² (210 348 / 240 336,8 / 300 band 85,7 / 330 band 44 / 200 MIN hạ 70 61,3 / 230 MIN hạ 70 161,7);
   S211-p29 18 tấm 965,6 m² (210 631,5 / 240 23,5 / 300 band 124,2 / 340 band 40,9 / 200 MIN 80,8 / 240 MIN 64,8; close_step_dashes=True).
   Kiểm tra trùng = 0, không có cảnh báo floors overlap. Cột/tường L2 đã có từ trước (máy cá nhân).
-- Chưa dựng (không có số chiều dày / viền hở): S210 sảnh giữa lõi thang và giếng trời ~33 m² (vòng 200 MIN) + 5 ô nhỏ;
-  S211 ô 18,2 m² (125889,252687) và 12,2 m² (121899,275279). Ban công PBS1 (o) là precast -> không dựng.
+- Bổ sung (23/10): S210-add sảnh + hành lang nối sang B 112,8 m² (200 MIN hạ 70; viền hở vì 2 nét hành lang
+  dừng trước x = 98 480 -> kéo nét tới đường chia, thêm nét bậc 0.48); S211-add hành lang ngoài phía bắc 188,9 m²
+  (200 MIN hạ 70). 0 trùng, không cảnh báo chồng sàn. Script: l2_lobby.py (C:\RevitMCP-work).
+- Ô trống còn lại là LỖ MỞ đúng: giếng trời (X), lõi thang SW1/SW2, hố thang máy LW1.
+- Chờ người dùng xác nhận: ban công PBS1 không có vòng số - S210 góc trên trái 17,7 m², S211 giữa dưới 12,2 m²
+  (ban công kề bên là 200 MIN).
 - Còn lại: L3 (S213/S214) cột-tường-sàn, mái (S216/S217); thiếu cột L3->mái (A: CC1B 1, CC4B 8, CC6 1; B: CC1B 1, CC4B 5).
 
 ## 2. Chưa dựng — cần kiểm tra tay
