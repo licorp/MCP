@@ -135,3 +135,26 @@ def set_param_safe(element, param_name_or_bip, value):
 Mỗi kịch bản sửa đổi qua MCP phải kết thúc bằng báo cáo tự kiểm thử:
 1. **Số lượng đối tượng thành công / thất bại**: Ví dụ `Created 471 cables, 286 ticks, 291 texts`.
 2. **Kiểm tra trực quan (Visual Verification)**: Gọi endpoint xuất ảnh `GET /revit_mcp/views/export/` hoặc crop vùng can thiệp để kiểm chứng kết quả trên màn hình trước khi thông báo cho người dùng.
+
+---
+
+## 6. Chẩn Đoán Kết Nối (chạy TRƯỚC mọi tác vụ khi tool lỗi)
+
+Gọi `get_revit_status`. Đọc lỗi theo bảng, sửa đúng nguyên nhân, KHÔNG thử lại mù quáng:
+
+| Lỗi trả về | Nguyên nhân | Việc cần làm |
+|---|---|---|
+| `All connection attempts failed` | Revit chưa mở, Routes server tắt, hoặc chưa Reload pyRevit | Kiểm tra `%APPDATA%\pyRevit\pyRevit_config.ini` → `[routes] enabled = true`; nhờ người dùng **pyRevit → Reload** |
+| `pairing.dpapi` không tồn tại / 401 | Máy chưa pairing | Nhờ người dùng bấm **MCP → Bridge → Connect → Yes**. KHÔNG tự tạo file pairing (đó là bước đồng ý của người dùng) |
+| Tool/route trả kết quả lạ | Hai extension cùng đăng ký route `revit_mcp` | Chỉ giữ `C:\RevitMCP\mcp-server-for-revit-python.extension`; chạy `setup.cmd` để cất bản trùng |
+| Đúng route nhưng sai model | Nhiều phiên Revit mở; chỉ một phiên giữ cổng 48884 | Hỏi người dùng phiên nào; Reload pyRevit ở phiên đó |
+| Sửa `claude_desktop_config.json` không ăn | Claude Desktop đang chạy ghi đè file | Người dùng thoát hẳn Claude rồi chạy `setup.cmd` |
+
+Kiểm tra nhanh từ shell (không cần MCP): `curl http://localhost:48884/revit_mcp/status/`
+— trả JSON lỗi pairing nghĩa là Revit + Routes đã chạy, chỉ thiếu pairing.
+
+**Đơn vị:** mọi giá trị chiều dài/cao độ từ API là **feet nội bộ**. Báo cho người dùng bằng mét/mm
+(`UnitUtils.ConvertFromInternalUnits(v, UnitTypeId.Meters)` hoặc ×0.3048).
+Ví dụ cao độ level `11.81` = 3.600 m.
+
+**Cài đặt / cập nhật thư viện trên máy mới:** xem `SETUP.md` ở gốc repo.
