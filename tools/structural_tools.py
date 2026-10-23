@@ -1651,13 +1651,14 @@ def register_structural_tools(mcp, revit_get, revit_post):
             schedule_catalog = parse_schedule_tables(page) if parse_schedule_tables else {}
 
             # Coc & dai coc: van dung parser cu (hinh tron coc trong da giac)
+            # Chi truyen tham so ma ban parser hien co nhan (ban moi hon co them pad/bbox/schedule).
+            import inspect
+            legacy_kw = {"default_pile_cap_thick_mm": default_pile_cap_thick_mm,
+                         "default_pad_footing_thick_mm": default_pad_footing_thick_mm,
+                         "drawing_area_bbox": bbox, "schedule_catalog": schedule_catalog}
+            accepted = inspect.signature(extract_shear_walls_and_foundations).parameters
             legacy = extract_shear_walls_and_foundations(
-                page, transformer, texts,
-                default_pile_cap_thick_mm=default_pile_cap_thick_mm,
-                default_pad_footing_thick_mm=default_pad_footing_thick_mm,
-                drawing_area_bbox=bbox,
-                schedule_catalog=schedule_catalog
-            )
+                page, transformer, texts, **{k: v for k, v in legacy_kw.items() if k in accepted})
             # Mong don / tuong / mong bang: bo trich xuat the he 2 (footing_wall_extractor) - mong dat
             # theo tim cot + bang thong ke, tuong co hatch lien tuc, mong bang theo tuong chan dat.
             area_pt = cal.get("drawing_area_pt")
