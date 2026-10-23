@@ -52,6 +52,15 @@ Gộp từ 3 phiên chat (20–22/10/2026). Đọc file này + `project_summary.
 - KHÔNG chạy finalize_and_join_structure trên GF: Revit crash (Assertion GeomTable.cpp) khi join cột/tường với
   sàn S.O.G (boolean fail cột CC3 1913359 với sàn 1916866). Nếu cần join: từng nhóm nhỏ, lưu trước.
 
+### Tầng L2 (23/10, máy công ty) — sàn L02
+- Sàn PT L2 ĐÃ DỰNG bằng suspended_slab_extractor (band 300/330/340, split x = 98 480):
+  S210-p28 17 tấm 1 037,6 m² (210 348 / 240 336,8 / 300 band 85,7 / 330 band 44 / 200 MIN hạ 70 61,3 / 230 MIN hạ 70 161,7);
+  S211-p29 18 tấm 965,6 m² (210 631,5 / 240 23,5 / 300 band 124,2 / 340 band 40,9 / 200 MIN 80,8 / 240 MIN 64,8; close_step_dashes=True).
+  Kiểm tra trùng = 0, không có cảnh báo floors overlap. Cột/tường L2 đã có từ trước (máy cá nhân).
+- Chưa dựng (không có số chiều dày / viền hở): S210 sảnh giữa lõi thang và giếng trời ~33 m² (vòng 200 MIN) + 5 ô nhỏ;
+  S211 ô 18,2 m² (125889,252687) và 12,2 m² (121899,275279). Ban công PBS1 (o) là precast -> không dựng.
+- Còn lại: L3 (S213/S214) cột-tường-sàn, mái (S216/S217); thiếu cột L3->mái (A: CC1B 1, CC4B 8, CC6 1; B: CC1B 1, CC4B 5).
+
 ## 2. Chưa dựng — cần kiểm tra tay
 
 - L1: PC1/PC2/PBS1 precast (o) chưa bóc tách; loại trong model dày 200 nhưng bảng ghi 180 (tên '-PC1' sai quy ước ' - PC1').
