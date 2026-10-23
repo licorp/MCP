@@ -374,8 +374,10 @@ def test_fake_revit_dry_run_apply_rerun():
     assert dry["column_family"] == "M_Concrete-Rectangular-Column", dry
     assert dry["beam_family"] == "M_Concrete-Rectangular Beam", dry
     assert dry["top_level"] == "L2", dry
-    assert dry["types_to_create"] == ["M_Concrete-Rectangular Beam : B1 - 300x600"], dry
-    assert dry["types_existing"] == ["M_Concrete-Rectangular-Column : 600x600"], dry
+    # co ma cot -> chi dung loai dung ma ("C1 - 600x600"), khong lay loai chung "600x600" (mat ma trong thong ke)
+    assert sorted(dry["types_to_create"]) == ["M_Concrete-Rectangular Beam : B1 - 300x600",
+                                              "M_Concrete-Rectangular-Column : C1 - 600x600"], dry
+    assert dry["types_existing"] == [], dry
     assert len(doc.elements) == n0, "dry_run khong duoc sua model"
 
     res = run_in_fake_revit(doc, base_params(cols, beams))
@@ -419,7 +421,8 @@ def test_fake_revit_real_project_conventions():
     assert dry["top_level"] == "BUILDING A-LEVEL 01", dry
     assert dry["column_family"] == "HPCE - Concrete-Rectangular-Column", dry
     assert dry["types_existing"] == ["HPCE - Concrete-Rectangular-Column : CC3 - 800x300"], dry
-    assert dry["types_to_create"] == ["HPCE - Concrete-Rectangular-Column : CC4A - 300x800"], dry
+    # quy uoc du an: canh lon truoc -> tao "CC4A - 800x300" va xoay cot 90 do
+    assert dry["types_to_create"] == ["HPCE - Concrete-Rectangular-Column : CC4A - 800x300"], dry
 
 
 def test_fake_revit_round_columns_and_rotation_reuse():

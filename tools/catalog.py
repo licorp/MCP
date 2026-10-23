@@ -30,6 +30,7 @@ TOOL_DESCRIPTIONS = {
     "batch_create_structural_framing_and_columns": "Creates structural columns then beams in one transaction after preflight checks.",
     "batch_create_footings_and_walls": "Creates footings, walls and strip footings from parsed foundation data using project types.",
     "batch_create_structural_slabs": "Creates structural slabs and cuts openings in one transaction.",
+    "parse_pdf_slab_on_ground": "Extracts slab-on-ground outlines, pits and openings from a vector PDF plan in Revit coordinates (mm).",
     "batch_create_structural_walls_and_foundations": "Creates shear walls, pile caps and pad/strip footings in one transaction.",
     "check_duplicates": "Scans columns, beams, walls, footings and slabs for duplicated or overlapping elements.",
     "generate_visual_qa_overlay": "Overlays modelled elements on the source PDF page and returns the image for visual QA.",

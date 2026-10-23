@@ -20,8 +20,11 @@ class InverseAffineProjector:
     Chiếu ngược tọa độ thực tế trong Revit (mm) về đúng tọa độ Pixel trên ảnh render trang PDF.
     Đảm bảo độ khớp tuyệt đối 100% không phụ thuộc vào Crop View của Revit.
     """
-    def __init__(self, transformer, zoom_factor: float = 2.5):
+    def __init__(self, transformer, zoom_factor: float = 2.5, rotation_matrix=None):
         self.t = transformer
+        # Trang co /Rotate (vd S208 xoay 90 do): toa do vector la toa do CHUA xoay, anh render la DA xoay
+        # -> nhan them page.rotation_matrix truoc khi doi ra pixel.
+        self.rot = rotation_matrix
         self.zoom = zoom_factor  # zoom = 2.5 tương đương ~180 DPI (rất nét cho Vision LLM)
 
     def revit_mm_to_pdf_pixel(self, x_rvt: float, y_rvt: float) -> Tuple[int, int]:
@@ -34,8 +37,12 @@ class InverseAffineProjector:
         py = -dx * self.t.sin_t + dy * self.t.cos_t
         
         # Bước 3: Đảo lại dấu trục Y của PDF và nhân hệ số phóng đại ảnh (zoom_factor)
-        u_pixel = int(round(px * self.zoom))
-        v_pixel = int(round((-py) * self.zoom))
+        ux, vy = px, -py
+        if self.rot is not None:
+            r = self.rot
+            ux, vy = ux * r.a + vy * r.c + r.e, ux * r.b + vy * r.d + r.f
+        u_pixel = int(round(ux * self.zoom))
+        v_pixel = int(round(vy * self.zoom))
         return (u_pixel, v_pixel)
 
     def mm_length_to_pixels(self, mm_val: float) -> int:
@@ -82,7 +89,8 @@ def generate_qa_overlay_image(
     # Tạo lớp trong suốt (Transparent Overlay) để vẽ cấu kiện Revit
     overlay = Image.new("RGBA", base_img.size, (255, 255, 255, 0))
     draw = ImageDraw.Draw(overlay)
-    projector = InverseAffineProjector(transformer, zoom_factor=zoom)
+    projector = InverseAffineProjector(transformer, zoom_factor=zoom,
+                                       rotation_matrix=page.rotation_matrix if page.rotation else None)
 
     # Khởi tạo font chữ nét cao
     font_elem = _get_font(22)

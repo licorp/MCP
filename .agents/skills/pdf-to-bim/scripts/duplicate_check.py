@@ -88,6 +88,21 @@ def classify_pair(a: Dict, b: Dict, min_ratio: float = 0.9, size_ratio: float = 
         if cov is not None and cov >= overlap_ratio:
             return {"kind": "overlap", "overlap": round(cov, 2), "a": _brief(a), "b": _brief(b)}
         return None
+    # Sàn có hình chiếu thật (poly): so phần giao THẬT, không so hình bao (dải 370 nằm trong hình bao của tấm 240
+    # hình vành khăn bao quanh nó bị báo nhầm 'overlap 1.0' ở 250793 L1).
+    if a.get("cat") == "Floors" and b.get("cat") == "Floors" and a.get("poly") and b.get("poly"):
+        pa, pb = _poly(a["poly"]), _poly(b["poly"])
+        if pa is not None and pb is not None:
+            small, big = min(pa.area, pb.area), max(pa.area, pb.area)
+            if small <= 0:
+                return None
+            r = pa.intersection(pb).area / small
+            if r < 0.01:
+                return None
+            kind = "duplicate" if r >= min_ratio else ("overlap" if r >= overlap_ratio else None)
+            if kind is None:
+                return None
+            return {"kind": kind, "overlap": round(r, 2), "a": _brief(a), "b": _brief(b)}
     inter = _plan_inter(a["bb"], b["bb"])
     if not inter:
         return None
@@ -98,13 +113,33 @@ def classify_pair(a: Dict, b: Dict, min_ratio: float = 0.9, size_ratio: float = 
     r = inter / small
     # Móng băng nằm gọn trong móng băng khác (cùng loại STRIP) = TRÙNG dù kích thước khác (vẽ lại ở 2 trang)
     same_strip = _kind(a) == "STRIP" and _kind(b) == "STRIP"
-    if same_cat and r >= min_ratio and (small / big >= size_ratio or same_strip):
+    # Sàn nằm gọn trong sàn khác cùng cao độ = TRÙNG dù kích thước khác (vd sàn dựng tay nhỏ nằm trong sàn
+    # dựng theo bản vẽ) - 2 tấm sàn không thể chiếm cùng chỗ.
+    same_slab = a.get("cat") == "Floors" and b.get("cat") == "Floors"
+    if same_cat and r >= min_ratio and (small / big >= size_ratio or same_strip or same_slab):
         kind = "duplicate"
     elif r >= overlap_ratio:
         kind = "overlap"
     else:
         return None
     return {"kind": kind, "overlap": round(r, 2), "a": _brief(a), "b": _brief(b)}
+
+
+def _poly(rings):
+    """[[ [x, y], ... ] (vòng ngoài), [lỗ], ...] (mm) -> shapely Polygon hợp lệ; None nếu không dựng được."""
+    try:
+        from shapely.geometry import Polygon
+    except Exception:  # pragma: no cover
+        return None
+    try:
+        rs = [[tuple(p[:2]) for p in r] for r in rings if len(r) >= 3]
+        if not rs:
+            return None
+        rs.sort(key=lambda r: -abs(Polygon(r).area))
+        g = Polygon(rs[0], rs[1:])
+        return g if g.is_valid else g.buffer(0)
+    except Exception:
+        return None
 
 
 def _brief(e):
@@ -159,6 +194,11 @@ def planned_bbox(kind: str, item: Dict, level_mm: float, top_mm: Optional[float]
         ys = [q["y"] for q in item["outer_loop_mm"]]
         z1 = level_mm + footing_top_offset_mm
         return [min(xs), min(ys), max(xs), max(ys), z1 - (item.get("thickness_mm") or 500), z1]
+    if kind == "SLAB" and item.get("outer_loop_mm"):        # san: hinh bao vien ngoai, day tu dinh xuong
+        xs = [q["x"] for q in item["outer_loop_mm"]]
+        ys = [q["y"] for q in item["outer_loop_mm"]]
+        z1 = level_mm + (item.get("z_offset_mm") or 0.0)
+        return [min(xs), min(ys), max(xs), max(ys), z1 - (item.get("thickness_mm") or 150), z1]
     if kind == "WALL" and item.get("bbox_mm"):          # tuong cong: hinh bao tinh san tu cung
         b = item["bbox_mm"]
         return [b[0], b[1], b[2], b[3], level_mm, top]
@@ -181,7 +221,7 @@ def planned_bbox(kind: str, item: Dict, level_mm: float, top_mm: Optional[float]
 
 
 CAT_OF = {"COL": "Structural Columns", "BEAM": "Structural Framing", "WALL": "Walls",
-          "PAD": "Structural Foundations", "STRIP": "Structural Foundations"}
+          "PAD": "Structural Foundations", "STRIP": "Structural Foundations", "SLAB": "Floors"}
 
 
 def planned_vs_existing(planned: List[Dict], existing: List[Dict], ignore_tag_prefix: str = "",
@@ -195,7 +235,7 @@ def planned_vs_existing(planned: List[Dict], existing: List[Dict], ignore_tag_pr
     for p in planned:
         pe = {"id": "planned:%s#%s" % (p["kind"], p["index"]), "cat": CAT_OF[p["kind"]],
               "type": p.get("mark"), "tag": "(sap dung)", "bb": p["bb"], "kind": p["kind"],
-              "line": p.get("line"), "width": p.get("width")}
+              "line": p.get("line"), "width": p.get("width"), "poly": p.get("poly")}
         for e in ex:
             res = classify_pair(pe, e, **kw)
             if res and res["kind"] == "duplicate":

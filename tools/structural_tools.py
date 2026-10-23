@@ -61,6 +61,11 @@ except ImportError:
     dupc = None
 
 try:
+    import sog_slab_extractor as sogx
+except ImportError:
+    sogx = None
+
+try:
     import footing_wall_extractor as fwx
     from pdf_struct_parser import column_to_revit
 except ImportError:
@@ -599,7 +604,7 @@ def size_match(s, b_mm, h_mm, shape):
     return False, False
 
 TYPE_CACHE = {}
-def resolve_type(fam, syms, b_mm, h_mm, plan, mark="", shape="rect"):
+def resolve_type(fam, syms, b_mm, h_mm, plan, mark="", shape="rect", big_first=False):
     """
     Tra ve (FamilySymbol, swapped). swapped=True: dung lai loai b x h co san cho cot can dat h x b
     -> caller xoay cot 90 do thay vi tao loai moi trung lap.
@@ -615,7 +620,8 @@ def resolve_type(fam, syms, b_mm, h_mm, plan, mark="", shape="rect"):
     if key in TYPE_CACHE:
         return TYPE_CACHE[key]
     names = [(nm(s), s) for s in syms]
-    cands = [n for z in sizes for n in ((mk + " - " + z) if mk else z, z)]
+    # co ma -> CHI nhan loai dung ma ('CC4B - 800x300'); loai chung '800x300' lam mat ma cot trong thong ke
+    cands = [(mk + " - " + z) for z in sizes] if mk else list(sizes)
     sym = None
     for want in cands:
         sym = next((s for n, s in names if n == want), None)
@@ -633,16 +639,21 @@ def resolve_type(fam, syms, b_mm, h_mm, plan, mark="", shape="rect"):
             swapped = name.endswith(sizes[1]) and sizes[0] != sizes[1]
         plan["types_existing"].add(fam + " : " + name)
     else:
+        # quy uoc du an: canh LON truoc ('CC4A - 800x300'); cot can dat 300x800 -> loai 800x300 + xoay 90 do
+        nb, nh = b, h
+        if big_first and shape != "round" and b < h:
+            nb, nh, swapped = h, b, True
+            name = (mk + " - " if mk else "") + "{}x{}".format(nb, nh)
         plan["types_to_create"].add(fam + " : " + name)
         if not P["dry_run"]:
             sym = syms[0].Duplicate(name)
             if shape == "round":
                 find_param(sym, D_NAMES).Set(ft(b))
             else:
-                find_param(sym, B_NAMES).Set(ft(b))
-                find_param(sym, H_NAMES).Set(ft(h))
+                find_param(sym, B_NAMES).Set(ft(nb))
+                find_param(sym, H_NAMES).Set(ft(nh))
             syms.append(sym)
-    if sym is not None and not sym.IsActive:
+    if sym is not None and not sym.IsActive and not P["dry_run"]:   # Activate = sua model -> chi khi ghi
         sym.Activate()
     TYPE_CACHE[key] = (sym, swapped)
     return sym, swapped
@@ -695,7 +706,8 @@ def main():
         if c.get("shape") == "round":
             d = c.get("diameter_mm") or c.get("b_mm", 300)
             return resolve_type(rcol_fam, rcol_syms, d, d, plan, c.get("mark", ""), "round")
-        return resolve_type(col_fam, col_syms, c.get("b_mm", 500), c.get("h_mm", 500), plan, c.get("mark", ""))
+        return resolve_type(col_fam, col_syms, c.get("b_mm", 500), c.get("h_mm", 500), plan, c.get("mark", ""),
+                            big_first=True)
 
     report = {
         "level": lvl.Name, "top_level": top.Name if top else None,
@@ -1148,6 +1160,23 @@ for bic in CATS:
                 d["width"] = e.Width * 304.8
             except Exception:
                 d["width"] = 300.0
+        # San: hinh chieu that (vien mat tren) de so trung theo phan giao that, khong theo hinh bao
+        if bic == BuiltInCategory.OST_Floors and isinstance(e, Floor):
+            try:
+                rings = []
+                for rf in HostObjectUtils.GetTopFaces(e):
+                    face = e.GetGeometryObjectFromReference(rf)
+                    for loop in face.GetEdgesAsCurveLoops():
+                        ring = []
+                        for c in loop:
+                            for q in list(c.Tessellate())[:-1]:
+                                ring.append([round(q.X * 304.8, 1), round(q.Y * 304.8, 1)])
+                        if len(ring) >= 3:
+                            rings.append(ring)
+                if rings:
+                    d["poly"] = rings
+            except Exception:
+                pass
         els.append(d)
 lv = [{"name": l.Name, "elev": l.Elevation * 304.8} for l in FilteredElementCollector(doc).OfClass(Level)]
 av = doc.ActiveView
@@ -1161,6 +1190,118 @@ for w in doc.GetWarnings():
 print(json.dumps({"elements": els, "levels": lv, "warnings": warns,
                   "active_level": getattr(getattr(av, "GenLevel", None), "Name", None)}))
 """
+
+
+# Code IronPython dung SAN (Floor) theo chuan PDF2BIM: loai co san 'HPCE - Concrete <t>mm' (hoac ten chua
+# '<t>mm'), structural, cao do = Level + z_offset, tag Comments, dry_run / replace / append, doc lai.
+SLAB_CODE_TEMPLATE = r'''
+import json, math
+from Autodesk.Revit.DB import *
+from System.Collections.Generic import List as CList
+P = json.loads(__PARAMS__)
+__SWALLOWER__
+
+def ft(mm):
+    return mm / 304.8
+
+def eid(x):
+    i = x.Id if hasattr(x, "Id") else x
+    return int(i.Value) if hasattr(i, "Value") else int(i.IntegerValue)
+
+def nm(e):
+    try:
+        return e.Name
+    except Exception:
+        return Element.Name.__get__(e)
+
+TAG = "PDF2BIM|" + P["source_tag"] + "|"
+report = {"source_tag": P["source_tag"], "problems": []}
+LEVELS = list(FilteredElementCollector(doc).OfClass(Level))
+lvl = None
+for _l in LEVELS:
+    if _l.Name == P["level_name"]:
+        lvl = _l
+if lvl is None:
+    report.update({"status": "error", "message": "Khong tim thay Level " + str(P["level_name"])})
+else:
+    FTS = [t for t in FilteredElementCollector(doc).OfClass(FloorType) if not t.IsFoundationSlab]
+    def thick(t):
+        cs = t.GetCompoundStructure()
+        return cs.GetWidth() * 304.8 if cs else None
+    def floor_type(t_mm):
+        exact = [t for t in FTS if nm(t) == "HPCE - Concrete %dmm" % int(round(t_mm))]
+        if exact:
+            return exact[0]
+        same = [t for t in FTS if thick(t) is not None and abs(thick(t) - t_mm) < 0.5 and "CONCRETE" in nm(t).upper()]
+        return same[0] if same else None
+    plan = []
+    for s in P["slabs"]:
+        t = floor_type(s.get("thickness_mm", 100))
+        if t is None:
+            report["problems"].append("SLAB %s: du an chua co loai san be tong %s mm" % (s.get("mark"), s.get("thickness_mm")))
+        plan.append((s, t))
+    existing = []
+    for e in FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Floors).WhereElementIsNotElementType():
+        p = e.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)
+        v = p.AsString() if p else None
+        if v and v.startswith(TAG):
+            existing.append(e)
+    report.update({"level": lvl.Name, "types_used": sorted(set(nm(t) for _, t in plan if t is not None)),
+                   "existing_with_same_tag": len(existing)})
+    if P["dry_run"]:
+        report.update({"status": "dry_run", "would_create": len(plan),
+                       "would_delete_existing": len(existing) if P["replace_existing"] else 0})
+    elif report["problems"]:
+        report.update({"status": "error", "message": "Thieu loai san - xem problems. Khong dung gi."})
+    elif existing and not P["replace_existing"] and not P["append_to_existing"]:
+        report.update({"status": "error", "message": "Da co %d san mang tag '%s'. Dung replace_existing=True hoac append_to_existing=True." % (len(existing), P["source_tag"])})
+    else:
+        created = []
+        t = Transaction(doc, "MCP: PDF2BIM Slabs " + P["source_tag"])
+        attach_failure_swallower(t)
+        t.Start()
+        try:
+            deleted = 0
+            if existing and P["replace_existing"]:
+                doc.Delete(CList[ElementId]([e.Id for e in existing]))
+                deleted = len(existing)
+            for s, typ in plan:
+                loops = CList[CurveLoop]()
+                for ring in [s["outer_loop_mm"]] + [h for h in s.get("opening_loops_mm", []) if len(h) >= 3]:
+                    cl = CurveLoop()
+                    pts = [XYZ(ft(q["x"]), ft(q["y"]), lvl.Elevation) for q in ring]
+                    if pts[0].DistanceTo(pts[-1]) < 0.003:
+                        pts = pts[:-1]
+                    for i in range(len(pts)):
+                        a, b = pts[i], pts[(i + 1) % len(pts)]
+                        if a.DistanceTo(b) > 0.005:
+                            cl.Append(Line.CreateBound(a, b))
+                    loops.Add(cl)
+                fl = Floor.Create(doc, loops, typ.Id, lvl.Id)
+                ps = fl.get_Parameter(BuiltInParameter.FLOOR_PARAM_IS_STRUCTURAL)
+                if ps and not ps.IsReadOnly:
+                    ps.Set(1)
+                pz = fl.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)
+                if pz and not pz.IsReadOnly:
+                    pz.Set(ft(s.get("z_offset_mm", 0.0)))
+                pc = fl.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)
+                if pc and not pc.IsReadOnly:
+                    pc.Set(TAG + "SLAB|" + str(s.get("mark", "SLAB")))
+                created.append(eid(fl))
+            t.Commit()
+            alive = [i for i in created if doc.GetElement(ElementId(i)) is not None]
+            areas = []
+            for i in alive:
+                a = doc.GetElement(ElementId(i)).get_Parameter(BuiltInParameter.HOST_AREA_COMPUTED)
+                areas.append(round(a.AsDouble() * 0.092903, 2) if a else None)
+            report.update({"status": "success" if len(alive) == len(plan) else "warning", "deleted_existing": deleted,
+                           "created_ids": created, "verify": {"expected": len(plan), "alive": len(alive), "areas_m2": areas}})
+        except Exception as ex:
+            if t.HasStarted() and not t.HasEnded():
+                t.RollBack()
+            report.update({"status": "error", "message": str(ex)})
+print(json.dumps(report))
+'''
 
 
 CAD_ARCS_QUERY_CODE = r"""
@@ -1238,6 +1379,9 @@ async def duplicate_guard(revit_post, planned, level_name, top_level_name="", ig
         bb = dupc.planned_bbox(kind, it, lvl, top, footing_top_offset_mm)
         if bb:
             item = {"kind": kind, "index": i, "mark": it.get("mark"), "bb": bb}
+            if kind == "SLAB" and it.get("outer_loop_mm"):
+                item["poly"] = [[[q["x"], q["y"]] for q in it["outer_loop_mm"]]] + \
+                               [[[q["x"], q["y"]] for q in h] for h in (it.get("opening_loops_mm") or [])]
             if kind in ("WALL", "BEAM") and it.get("start_mm") and it.get("end_mm") and not it.get("mid_mm"):
                 item["line"] = [it["start_mm"]["x"], it["start_mm"]["y"], it["end_mm"]["x"], it["end_mm"]["y"]]
                 item["width"] = it.get("thickness_mm") or it.get("b_mm") or 200
@@ -1788,112 +1932,174 @@ def register_structural_tools(mcp, revit_get, revit_post):
     async def batch_create_structural_slabs(
         level_name: str,
         slabs: List[Dict[str, Any]],
+        source_tag: str = "",
+        dry_run: bool = False,
+        replace_existing: bool = False,
+        append_to_existing: bool = False,
+        allow_duplicates: bool = False,
         ctx: Context = None
     ) -> str:
         """
-        Dựng Sàn Kết cấu (Structural Slabs) và khoét lỗ mở (Openings) hàng loạt trong Revit trong 1 Transaction.
+        Dung SAN ket cau (S.O.G, san tang) kem lo mo bang LOAI CO SAN cua du an: 'HPCE - Concrete <t>mm'
+        (hoac loai be tong cung chieu day). Thieu loai -> bao 'problems', KHONG dung (khong tu che loai).
+        slabs: [{"mark", "thickness_mm", "z_offset_mm", "outer_loop_mm": [{x,y}], "opening_loops_mm": [[{x,y}]]}]
+        Cao do dinh san = Level + z_offset_mm. Structural = Yes. Comments 'PDF2BIM|<source_tag>|SLAB|<mark>'.
+        Quy trinh: dry_run=True truoc; replace_existing=True xoa san cung tag roi dung lai; append_to_existing=True
+        chi bo sung. KIEM TRA TRUNG truoc khi ghi (trung -> khong ghi, tru allow_duplicates) va sau khi ghi.
         """
-        revit_code = f"""
-import clr, json, math
-clr.AddReference('RevitAPI')
-from Autodesk.Revit.DB import *
-from System.Collections.Generic import List as CList
+        tag = (source_tag or "manual").strip().replace("|", "-")
+        if replace_existing and not source_tag:
+            return "Error: replace_existing=True can source_tag cu the (vd 'S204-p22')."
+        planned = [("SLAB", x) for x in (slabs or [])]
+        try:
+            guard, _ = await duplicate_guard(revit_post, planned, level_name, "",
+                                             "PDF2BIM|" + tag + "|" if replace_existing else "", ctx=ctx)
+        except Exception as e:
+            return format_response({"status": "error", "message": "Kiem tra trung that bai: " + str(e)})
+        if guard and not dry_run and not allow_duplicates:
+            return format_response({
+                "status": "error",
+                "message": "{} san sap dung se TRUNG voi san dang co -> khong ghi. Xu ly san cu (existing_id) truoc, "
+                           "hoac dung replace_existing neu cung source_tag.".format(len(guard)),
+                "would_duplicate_existing": guard})
+        params = {"level_name": level_name, "source_tag": tag, "dry_run": bool(dry_run),
+                  "replace_existing": bool(replace_existing),
+                  "append_to_existing": bool(append_to_existing) and not replace_existing, "slabs": slabs or []}
+        code = (SLAB_CODE_TEMPLATE.replace("__PARAMS__", repr(json.dumps(params)))
+                .replace("__SWALLOWER__", FAILURE_SWALLOWER_CODE))
+        try:
+            result = await run_revit_json(revit_post, code, "PDF2BIM slabs {} {}".format(
+                tag, "dry-run" if dry_run else "apply"), ctx, timeout=300.0)
+        except Exception as e:
+            return format_response({"status": "error", "message": str(e)})
+        post = None
+        if not dry_run and isinstance(result, dict) and result.get("status") in ("success", "warning"):
+            post = await post_build_duplicate_check(revit_post, ctx)
+        return format_response(_attach_dup_report(result, guard, post))
 
-doc = __revit__.ActiveUIDocument.Document
-{FAILURE_SWALLOWER_CODE}
-
-def mm_to_ft(mm_val):
-    return mm_val / 304.8
-
-def get_or_create_floor_type(thickness_mm):
-    target_name = "HPCE - {{}}mm Floor".format(int(thickness_mm))
-    collector = FilteredElementCollector(doc).OfClass(FloorType)
-    fallback = None
-    for ft in collector:
-        if ft.Name == target_name:
-            return ft
-        if not fallback:
-            fallback = ft
-    if not fallback:
-        raise Exception("Khong tim thay FloorType mau")
-    new_ft = fallback.Duplicate(target_name)
-    try:
-        cs = new_ft.GetCompoundStructure()
-        if cs:
-            cs.SetLayerWidth(0, mm_to_ft(thickness_mm))
-            new_ft.SetCompoundStructure(cs)
-    except Exception:
-        pass
-    return new_ft
-
-def build_curve_loop(pt_list):
-    cl = CurveLoop()
-    n = len(pt_list)
-    for i in range(n):
-        p1 = XYZ(mm_to_ft(pt_list[i]['x']), mm_to_ft(pt_list[i]['y']), 0)
-        p2 = XYZ(mm_to_ft(pt_list[(i+1)%n]['x']), mm_to_ft(pt_list[(i+1)%n]['y']), 0)
-        if p1.DistanceTo(p2) > 0.005:
-            cl.Append(Line.CreateBound(p1, p2))
-    return cl
-
-level_name = {json.dumps(level_name)}
-slabs_data = {json.dumps(slabs)}
-
-lvl = next((l for l in FilteredElementCollector(doc).OfClass(Level) if l.Name == level_name), None)
-if not lvl:
-    lvl = doc.ActiveView.GenLevel
-
-if not lvl:
-    print(json.dumps({{"status": "error", "message": "Khong tim thay Level " + str(level_name)}}))
-else:
-    created_slabs = []
-    t = Transaction(doc, "MCP: Auto-Build Structural Slabs from PDF")
-    attach_failure_swallower(t)
-    t.Start()
-    try:
-        for s in slabs_data:
-            thk = s.get("thickness_mm", 150)
-            ftype = get_or_create_floor_type(thk)
-            
-            profile_loops = CList[CurveLoop]()
-            outer_cl = build_curve_loop(s["outer_loop_mm"])
-            profile_loops.Add(outer_cl)
-            
-            for op in s.get("opening_loops_mm", []):
-                if len(op) >= 3:
-                    op_cl = build_curve_loop(op)
-                    profile_loops.Add(op_cl)
-            
-            floor_inst = Floor.Create(doc, profile_loops, ftype.Id, lvl.Id)
-            
-            p_struct = floor_inst.get_Parameter(BuiltInParameter.FLOOR_PARAM_IS_STRUCTURAL)
-            if p_struct and not p_struct.IsReadOnly:
-                p_struct.Set(1)
-                
-            z_off = s.get("z_offset_mm", 0.0)
-            if z_off != 0.0:
-                pz = floor_inst.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)
-                if pz and not pz.IsReadOnly:
-                    pz.Set(mm_to_ft(z_off))
-                    
-            created_slabs.append(floor_inst.Id.IntegerValue)
-            
-        t.Commit()
-        print(json.dumps({{
-            "status": "success",
-            "level": lvl.Name,
-            "created_slabs_count": len(created_slabs),
-            "slab_ids": created_slabs
-        }}))
-    except Exception as ex:
-        t.RollBack()
-        print(json.dumps({{"status": "error", "message": str(ex)}}))
-"""
-        payload = {"code": revit_code, "description": f"Auto-Build Slabs for {level_name}"}
-        if ctx:
-            await ctx.info(f"Đang dựng {len(slabs)} sàn kết cấu trên level {level_name}...")
-        response = await revit_post("/execute_code/", payload, ctx, timeout=120.0)
-        return format_response(response)
+    @mcp.tool()
+    async def parse_pdf_slab_on_ground(
+        zone_pages: List[int],
+        overall_page: int = 0,
+        pdf_path: str = "",
+        zone_levels: Optional[Dict[str, str]] = None,
+        default_thickness_mm: int = 0,
+        min_opening_m2: float = 1.0,
+        wall_gap_tol_mm: float = 25.0,
+        notch_fill_mm: float = 900.0,
+        smooth_mm: float = 200.0,
+        ctx: Context = None
+    ) -> str:
+        """
+        Bien SAN TREN NEN (S.O.G) tu vector PDF - dung cho trang S.O.G (khong co dam -> parse_pdf_structural_plan
+        ra 0 san). Bien san = MAT TRONG vong tuong bao lay tren TRANG TONG (S203...), chung 1 he toa do cho moi zone.
+        zone_pages: cac trang zone theo thu tu (vd [22, 23] = S204 Zone A, S205 Zone B). Zone truoc giu dai chong.
+          - Khop toa do: trang tong -> cot DA DUNG tag PDF2BIM (tung zone phai co cot da dung truoc).
+          - Net mat tuong: tu chon nhom net (mau + net day) khep duoc vung kin lon nhat (khe <= wall_gap_tol_mm).
+          - Lam sach bien: lap khac lom hep hon notch_fill_mm (cot bien loi khoi mat tuong -> san chay lien duoi
+            cot), bo rang cua nho hon smooth_mm (tuong cong ve bang doan ngan). Dien tich truoc/sau trong 'outline_cleaning'.
+          - Lo mo: chu X tren trang tong, dien tich >= min_opening_m2 (lo nho / ky hieu X canh cot -> 'skipped').
+          - Chia zone: duong 'FOR CONTINUATION REFER ...' cua trang zone; zone lay phia chua cot cua zone do.
+          - Chieu day: so ghi truoc 'S.O.G' tren trang zone (khong doc duoc -> default_thickness_mm, =0 -> bao loi).
+          - Level: zone_levels {"A": "BUILDING A-GROUND FLOOR"} hoac tu tim level 'BUILDING <zone>-' cung cao do.
+        Tra ve 'zones': moi zone co level_name, source_tag ('S204-p22'), slabs -> dung thang cho
+        batch_create_structural_slabs (dry_run truoc). CHI DOC, khong sua model.
+        """
+        if sogx is None or fitz is None or ovc is None:
+            return "Error: thieu module sog_slab_extractor / PyMuPDF / overall_calibration."
+        pdf = find_project_pdf(pdf_path)
+        if not pdf:
+            return "Error: khong tim thay file PDF du an."
+        zone_pages = [int(p) for p in (zone_pages or [])]
+        if not zone_pages:
+            return "Error: can zone_pages (vd [22, 23])."
+        try:
+            # 1. Khop tung trang zone qua trang tong -> diem moc + title block (sheet, zone)
+            cals = []
+            for pno in zone_pages:
+                cal = await auto_calibrate(revit_post, pdf, pno, ctx, method="overall", overall_page=overall_page)
+                if cal.get("status") != "success":
+                    return format_response({"status": "error", "page": pno,
+                                            "message": "Khop toa do trang zone qua trang tong that bai - dung cot "
+                                                       "cua zone nay truoc.", "calibration": cal})
+                cals.append(cal)
+            ov_no = overall_page or cals[0].get("overall_page")
+            info = await run_revit_json(revit_post, CALIB_QUERY_CODE.replace(
+                "__PARAMS__", repr(json.dumps({"level_name": (cals[0].get("revit") or {}).get("level") or ""}))),
+                "Query columns for S.O.G", ctx, timeout=120.0)
+            ref = [c for c in info.get("columns", []) if (c.get("tag") or "").startswith("PDF2BIM|")]
+            if len(ref) < 4:
+                return "Error: can >= 4 cot da dung (tag PDF2BIM) di qua tang nay de khop trang tong."
+            model = await query_model_elements(revit_post, ctx)
+            levels = model.get("levels", [])
+            if ctx:
+                await ctx.info("Doc vector trang tong {} ...".format(ov_no))
+            with fitz.open(pdf) as fdoc:
+                ov = fdoc[ov_no - 1]
+                ov_scale = drawing_scale_from_text(ov) or 150
+                to_rvt, st = sogx.overall_transform(ov, ov_scale, [(c["x"], c["y"]) for c in ref])
+                if to_rvt is None:
+                    return format_response({"status": "error", "message": "Khong khop duoc trang tong voi cot da dung.",
+                                            "stats": st})
+                xs, ys = [c["x"] for c in ref], [c["y"] for c in ref]
+                bbox = (min(xs) - 15000, min(ys) - 15000, max(xs) + 15000, max(ys) + 15000)
+                drw = ov.get_drawings()
+                inner = sogx.interior_from_page(drw, to_rvt, bbox, tol_mm=wall_gap_tol_mm)
+                if inner.get("polygon") is None:
+                    return format_response({"status": "error", "message": "Khong tim duoc vong tuong khep kin tren trang "
+                                            "tong (thu tang wall_gap_tol_mm).", "candidates": inner.get("candidates")})
+                inner["polygon"], cleaned = sogx.clean_outline(inner["polygon"], notch_fill_mm, smooth_mm)
+                ops, skipped = sogx.x_openings(drw, to_rvt, inner["polygon"], min_area_m2=min_opening_m2)
+                zones, problems, notes = [], [], []
+                for pno, cal in zip(zone_pages, cals):
+                    pg = fdoc[pno - 1]
+                    tb = cal.get("title_block") or {}
+                    sheet = tb.get("sheet_number") or "P{}".format(pno)
+                    tag = "{}-p{}".format(sheet, pno)
+                    zcols = [(c["x"], c["y"]) for c in ref if "|{}|".format(tag) in (c.get("tag") or "")]
+                    if not zcols:
+                        problems.append("{}: chua co cot tag PDF2BIM|{} - khong xac dinh duoc phia zone.".format(sheet, tag))
+                    f_zone = sogx.similarity_from_pts(cal["pdf_grid_pt1"], cal["pdf_grid_pt2"],
+                                                      cal["revit_grid_pt1_mm"], cal["revit_grid_pt2_mm"])
+                    words = [w[4].upper() for w in pg.get_text("words")]
+                    for kw in ("STEP", "FOLD"):
+                        if words.count(kw):
+                            notes.append("{}: {} ghi chu '{}' (buoc/gap mat san) - KHONG dung tu dong, kiem tra tay."
+                                         .format(sheet, words.count(kw), kw))
+                    zones.append({"zone": tb.get("zone") or sheet, "sheet": sheet, "page": pno, "source_tag": tag,
+                                  "columns": zcols, "thickness_mm": sogx.sog_thickness(pg) or default_thickness_mm,
+                                  "line": sogx.match_line(pg, f_zone) if pno != zone_pages[-1] else None,
+                                  "revit_level": (cal.get("revit") or {}).get("level")})
+                for z in zones[:-1]:
+                    if z["line"] is None:
+                        problems.append("{}: khong tim thay duong chia zone ('FOR CONTINUATION ...').".format(z["sheet"]))
+                if problems:
+                    return format_response({"status": "error", "problems": problems})
+                out = []
+                for z in sogx.split_zones(inner["polygon"], zones):
+                    if not z["thickness_mm"]:
+                        problems.append("{}: khong doc duoc chieu day S.O.G - truyen default_thickness_mm.".format(z["sheet"]))
+                        continue
+                    lvl = (zone_levels or {}).get(z["zone"])
+                    if not lvl:
+                        base = next((l for l in levels if l["name"] == z["revit_level"]), None)
+                        cand = [l["name"] for l in levels if base and abs(l["elev"] - base["elev"]) < 1
+                                and "BUILDING {}-".format(z["zone"]).upper() in l["name"].upper()]
+                        lvl = cand[0] if cand else z["revit_level"]
+                    zops = [o for o in ops if z["region"].contains(o.centroid)]
+                    slabs = sogx.to_slab_payload(z["region"], z["thickness_mm"], "S.O.G {}".format(int(z["thickness_mm"])), zops)
+                    out.append({"zone": z["zone"], "sheet": z["sheet"], "source_tag": z["source_tag"], "level_name": lvl,
+                                "thickness_mm": z["thickness_mm"], "match_line": z["line"],
+                                "area_m2": round(sum(s["area_m2"] for s in slabs), 2),
+                                "openings": len(zops), "slabs": slabs})
+            return format_response({
+                "status": "success" if not problems else "warning", "pdf_path": pdf,
+                "overall_page": ov_no, "overall_to_revit": st,
+                "wall_face_style": inner.get("style"), "interior_area_m2": inner.get("area_m2"),
+                "outline_cleaning": cleaned,
+                "skipped_openings": skipped, "problems": problems, "notes": notes, "zones": out})
+        except Exception as e:
+            return format_response({"status": "error", "message": str(e)})
 
     @mcp.tool()
     async def batch_create_structural_walls_and_foundations(

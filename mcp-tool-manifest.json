@@ -120,6 +120,10 @@
       "description": "Extracts shear walls, pile caps, piles and pad/strip footings from a vector PDF plan in Revit coordinates (mm)."
     },
     {
+      "name": "parse_pdf_slab_on_ground",
+      "description": "Extracts slab-on-ground outlines, pits and openings from a vector PDF plan in Revit coordinates (mm)."
+    },
+    {
       "name": "parse_pdf_structural_plan",
       "description": "Extracts columns, beams, slabs and openings from a vector PDF plan in Revit coordinates (mm)."
     },
