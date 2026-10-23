@@ -175,20 +175,30 @@ def _strip_width(g: Polygon) -> Tuple[float, float]:
     return g.area / max(e[1], 1.0), e[1]
 
 
+def _band_thk(g, B: List[Dict], band_set, default: int) -> int:
+    """Chiều dày dải = vòng tròn (thuộc band_set, không MIN) trong/sát dải; nhiều giá trị -> gần nhất; không có -> default."""
+    c = [b for b in B if not b["min"] and b["thk"] in band_set and g.buffer(300).contains(Point(b["x"], b["y"]))]
+    if not c:
+        return default
+    return min(c, key=lambda b: g.distance(Point(b["x"], b["y"])))["thk"]
+
+
 def _split_by_edge_bands(main: Polygon, B: List[Dict], dpts: Sequence[Pt], band_thickness: int,
-                         dashed: Sequence[LineString]) -> List[Dict]:
+                         dashed: Sequence[LineString], band_set=None) -> List[Dict]:
     """Dải bám mép (band_strips) + phần còn lại chia theo vòng tròn; mảnh lẫn nhiều chiều dày chia thêm bằng nét đứt."""
+    band_set = set(band_set or (band_thickness,))
     bands, _ = band_strips(main, dpts)
-    info = [{"g": g, "thk": band_thickness, "multi": False, "why": "edge band"} for g in _parts(bands) if g.area > 1e4]
+    info = [{"g": g, "thk": _band_thk(g, B, band_set, band_thickness), "band": True, "multi": False, "why": "edge band"}
+            for g in _parts(bands) if g.area > 1e4]
     rest = main.difference(bands)
     for comp in _parts(rest):
         if comp.area < 1e4:
             continue
         # vòng tròn 370 nằm NGOÀI dải bám mép (dải lệch vào trong) cũng tính -> buộc chia tiếp bằng nét đứt
         th = sorted(set(b["thk"] for b in B if not b["min"] and comp.contains(Point(b["x"], b["y"]))
-                        and not (b["thk"] == band_thickness and bands.buffer(200).contains(Point(b["x"], b["y"])))))
+                        and not (b["thk"] in band_set and bands.buffer(200).contains(Point(b["x"], b["y"])))))
         if len(th) == 1:
-            info.append({"g": comp, "thk": th[0], "multi": False, "why": "bubble"})
+            info.append({"g": comp, "thk": th[0], "band": th[0] in band_set, "multi": False, "why": "bubble"})
             continue
         if len(th) > 1:
             U = unary_union([comp.boundary] + [l.intersection(comp.buffer(1)) for l in dashed if l.intersects(comp)])
@@ -196,16 +206,22 @@ def _split_by_edge_bands(main: Polygon, B: List[Dict], dpts: Sequence[Pt], band_
                 if g.area < 1e4 or not comp.buffer(5).contains(g.representative_point()):
                     continue
                 t2 = sorted(set(b["thk"] for b in B if not b["min"] and g.contains(Point(b["x"], b["y"]))))
-                if not t2:      # ô con không vòng tròn: dải hẹp ~1200 kề dải dày -> dải; ô lớn -> theo chiều dày chính của mảnh
+                isb = False
+                if not t2:      # ô con không vòng tròn: dải hẹp ~1200 kề dải dày -> dải (chiều dày dải kề); ô lớn -> chưa rõ
                     w, _ = _strip_width(g)
                     if w <= 2000 and g.buffer(30).intersection(bands).area > 0:
-                        t2 = [band_thickness]
-                info.append({"g": g, "thk": t2[0] if len(t2) == 1 else None, "multi": len(t2) > 1, "why": "bubble+dashed"})
+                        nb = max((o for o in info if o.get("band")), key=lambda o: g.buffer(30).intersection(o["g"]).area)
+                        t2, isb = [nb["thk"]], True
+                info.append({"g": g, "thk": t2[0] if len(t2) == 1 else None, "band": isb or (len(t2) == 1 and t2[0] in band_set),
+                             "multi": len(t2) > 1,
+                             "why": "bubble+dashed"})
             continue
         # không vòng tròn: mảnh nhỏ sát dải -> dải; còn lại -> chưa xác định
         touch = comp.buffer(30).intersection(bands).area > 0
-        info.append({"g": comp, "thk": band_thickness if (touch and comp.area < 3e6) else None, "multi": False,
-                     "why": "residual next to band" if touch and comp.area < 3e6 else "no bubble"})
+        nb = max((o for o in info if o.get("band")), key=lambda o: comp.buffer(30).intersection(o["g"]).area, default=None)
+        ok = touch and comp.area < 3e6 and nb is not None
+        info.append({"g": comp, "thk": nb["thk"] if ok else None, "band": ok, "multi": False,
+                     "why": "residual next to band" if ok else "no bubble"})
     for it in info:                       # mảnh vụn < 0.5 m2 -> gộp ô kề lớn nhất
         if it["thk"] is None and it["g"].area < 5e5:
             nb = max((o for o in info if o is not it and o["thk"] is not None),
@@ -217,11 +233,18 @@ def _split_by_edge_bands(main: Polygon, B: List[Dict], dpts: Sequence[Pt], band_
 
 def extract(page, to_revit, zone_side, split_line: LineString, band_thickness: int = 370,
             step_mm: float = 70.0, band_width_mm=(900.0, 2000.0), dim_text: str = "1200",
-            fill_hole_m2: float = 15.0, tol_mm: float = 25.0, bbox_mm=None) -> Dict:
+            fill_hole_m2: float = 15.0, tol_mm: float = 25.0, bbox_mm=None, band_thicknesses=None,
+            close_step_dashes: bool = False) -> Dict:
     """
     zone_side: điểm (mm) nằm phía zone cần lấy so với split_line. Trả {slabs_by_kind, report}.
     slabs: [{"thickness_mm", "z_offset_mm", "region": Polygon/MultiPolygon, "label"}].
+    band_thicknesses: các chiều dày dải 1200 trên trang (vd L2 250793: 300/330/340); mỗi dải lấy theo vòng tròn
+    trong dải, dải không có vòng tròn lấy theo dải thẳng hàng / kề bên, cuối cùng mới dùng band_thickness.
+    Sàn hạ cốt (MIN) chia theo từng mảnh: chiều dày = vòng tròn MIN trong mảnh.
+    close_step_dashes: đường bậc / mép sàn hạ cốt vẽ gạch đứt (L2 250793) -> nối gạch (không kéo dài) để khép ô MIN;
+    ô MIN chỉ nhận khi gần như không chồng sàn chính.
     """
+    band_set = set(band_thicknesses or ()) | {band_thickness}
     drw = page.get_drawings()
     B = bubbles(page, to_revit)
     side = sx.half_plane(split_line.coords[0], split_line.coords[-1], zone_side)
@@ -235,9 +258,24 @@ def extract(page, to_revit, zone_side, split_line: LineString, band_thickness: i
     mains = [h for h in holes if has(h, lambda b: not b["min"])]
     main = unary_union(mains) if mains else None
     podium_faces = [h for h in holes if h not in mains and has(h, lambda b: b["min"])]
+    if close_step_dashes and main is not None:
+        dlp = dashed_lines(drw, to_revit, dash_mm=(20.0, 700.0), extend_mm=0.0, min_len_mm=500.0)
+        holes2 = faces_from_lines(list(groups[key]) + dlp + [split_line], tol_mm, 1e6 * 0.3)
+        got = unary_union(podium_faces) if podium_faces else Polygon()
+        for h in holes2:
+            if not side.contains(h.representative_point()) or not has(h, lambda b: b["min"]):
+                continue
+            if h.intersection(main).area > 0.05 * h.area or (not got.is_empty and h.intersection(got).area > 0.05 * h.area):
+                continue
+            podium_faces.append(h)
+            got = unary_union([got, h])
     slab_core = unary_union([main] + podium_faces) if main is not None else unary_union(podium_faces)
     # ô nhỏ (lòng tường / cột) nằm trong sàn -> lấp; ô lớn không vòng tròn -> báo
-    xs = sx.x_openings(drw, to_revit, slab_core.buffer(3 * tol_mm), min_area_m2=1.0)
+    # dấu X trong ô LỖ giữa sàn (giếng thang máy, giếng trời) / ô nhỏ sắp lấp cạnh sàn cũng là lỗ mở
+    small = [h for h in holes if h not in mains and h not in podium_faces and h.area <= fill_hole_m2 * 1e6
+             and h.buffer(3 * tol_mm).intersection(slab_core).area > 0]
+    core_full = unary_union([Polygon(g.exterior) for g in _parts(slab_core)] + small)
+    xs = sx.x_openings(drw, to_revit, core_full.buffer(3 * tol_mm), min_area_m2=1.0)
     op_polys = [o[0] if isinstance(o, tuple) else o for o in (xs[0] if isinstance(xs, tuple) else xs)]
     report = {"bubbles": len(B), "unbuilt_regions": [], "unresolved_main_faces": [], "openings": len(op_polys)}
     fills = []
@@ -260,25 +298,37 @@ def extract(page, to_revit, zone_side, split_line: LineString, band_thickness: i
         th = sorted(set(b["thk"] for b in B if not b["min"] and g.contains(Point(b["x"], b["y"]))))
         w, L = _strip_width(g)
         info.append({"g": g, "thk": th[0] if len(th) == 1 else None, "multi": len(th) > 1, "w": w, "len": L,
+                     "band": bool(len(th) == 1 and th[0] in band_set),
                      "dim": sum(1 for d in dims if g.buffer(700).contains(Point(d)))})
-    for it in info:                       # dải 1200 có kích thước '1200' -> dải dày
+    for it in info:                       # dải 1200 có kích thước '1200' -> dải dày (chiều dày xác định sau)
         if it["thk"] is None and not it["multi"] and band_width_mm[0] <= it["w"] <= band_width_mm[1] and it["dim"]:
-            it["thk"], it["why"] = band_thickness, "band (dim %s)" % dim_text
+            it["band"], it["why"] = True, "band (dim %s)" % dim_text
+
+    def _collinear(a, b):
+        # thẳng hàng: bao lồi của 2 đoạn vẫn chỉ rộng ~1 dải (đoạn bị tường cắt ngang, khe ~250 mm)
+        if abs(a["w"] - b["w"]) >= 150 or a["g"].distance(b["g"]) > 400:
+            return False
+        return _strip_width(unary_union([a["g"], b["g"]]).convex_hull)[0] <= max(a["w"], b["w"]) + 150
+
     changed = True
-    while changed:                        # dải thẳng hàng, cùng bề rộng, kề dải dày đã có
+    while changed:                        # dải thẳng hàng / kề dải đã biết chiều dày -> cùng chiều dày
         changed = False
         for it in info:
             if it["thk"] is not None or not band_width_mm[0] <= it["w"] <= band_width_mm[1]:
                 continue
-            for o in info:
-                if o["thk"] != band_thickness or abs(o["w"] - it["w"]) >= 150 or it["g"].distance(o["g"]) > 400:
-                    continue
-                # thẳng hàng: bao lồi của 2 đoạn vẫn chỉ rộng ~1 dải (đoạn bị tường cắt ngang, khe ~250 mm)
-                hw = _strip_width(unary_union([it["g"], o["g"]]).convex_hull)[0]
-                if hw <= max(it["w"], o["w"]) + 150:
-                    it["thk"], it["why"] = band_thickness, "band (collinear)"
-                    changed = True
-                    break
+            known = [o for o in info if o.get("band") and o["thk"] is not None and o is not it]
+            o = next((o for o in known if _collinear(it, o)), None)
+            why = "band (collinear)"
+            if o is None and it.get("band"):
+                o = max((o for o in known if it["g"].distance(o["g"]) <= 400),
+                        key=lambda o: it["g"].buffer(400).intersection(o["g"]).area, default=None)
+                why = "band (dim %s, adjacent band)" % dim_text
+            if o is not None:
+                it["thk"], it["band"], it["why"] = o["thk"], True, why
+                changed = True
+    for it in info:                       # dải có kích thước 1200 nhưng không dải nào kề có số -> chiều dày mặc định
+        if it.get("band") and it["thk"] is None:
+            it["thk"], it["why"] = band_thickness, "band (dim %s, default)" % dim_text
     for it in info:                       # mảnh vụn < 0.5 m2 -> gộp ô kề lớn nhất
         if it["thk"] is None and it["g"].area < 5e5:
             nb = max((o for o in info if o is not it and o["thk"] is not None),
@@ -288,11 +338,11 @@ def extract(page, to_revit, zone_side, split_line: LineString, band_thickness: i
     report["split_method"] = "dashed_lines"
     if any(it["thk"] is None and it["multi"] for it in info):
         # nét đứt không khép được dải (mép cong / góc bậc) -> dò dải bám mép theo gạch nét đứt cách mép 1200
-        info = _split_by_edge_bands(main, B, dash_points(drw, to_revit), band_thickness, dl)
+        info = _split_by_edge_bands(main, B, dash_points(drw, to_revit), band_thickness, dl, band_set)
         report["split_method"] = "edge_bands"
-    in_band = unary_union([it["g"] for it in info if it["thk"] == band_thickness]) if info else Polygon()
+    in_band = unary_union([it["g"] for it in info if it.get("band")]) if info else Polygon()
     report["band_bubbles_outside_bands"] = [[round(b["x"]), round(b["y"])] for b in B
-                                            if b["thk"] == band_thickness and not b["min"] and main.contains(Point(b["x"], b["y"]))
+                                            if b["thk"] in band_set and not b["min"] and main.contains(Point(b["x"], b["y"]))
                                             and not in_band.buffer(200).contains(Point(b["x"], b["y"]))]
     # ô lấp (lòng tường / ô khu ướt) chạm sàn chính -> thuộc ô sàn chính kề nhiều nhất (cùng chiều dày)
     for h in fills:
@@ -313,17 +363,18 @@ def extract(page, to_revit, zone_side, split_line: LineString, band_thickness: i
         total = total.difference(o)
     used = None
     out = []
-    order = sorted([it for it in info if it["thk"] is not None], key=lambda it: (0 if it["thk"] == band_thickness else 1, -it["g"].area))
-    by_thk: Dict[int, list] = {}
+    order = sorted([it for it in info if it["thk"] is not None], key=lambda it: (0 if it.get("band") else 1, -it["g"].area))
+    by_thk: Dict[tuple, list] = {}
     for it in order:
-        by_thk.setdefault(it["thk"], []).append(it["g"])
+        by_thk.setdefault((bool(it.get("band")), it["thk"]), []).append(it["g"])
     main_closed = unary_union([main] + [f for f in fills if f.buffer(3 * tol_mm).intersects(main)]).buffer(tol_mm * 1.2, join_style=2)
-    for thk in sorted(by_thk, key=lambda t: 0 if t == band_thickness else 1):
-        reg = unary_union([g.buffer(tol_mm * 1.2, join_style=2) for g in by_thk[thk]]).intersection(main_closed).intersection(total)
+    for key in sorted(by_thk, key=lambda k: (0 if k[0] else 1, k[1])):
+        isb, thk = key
+        reg = unary_union([g.buffer(tol_mm * 1.2, join_style=2) for g in by_thk[key]]).intersection(main_closed).intersection(total)
         if used is not None:
             reg = reg.difference(used)
         used = reg if used is None else used.union(reg)
-        out.append({"thickness_mm": thk, "z_offset_mm": 0.0, "region": reg, "label": "%d" % thk})
+        out.append({"thickness_mm": thk, "z_offset_mm": 0.0, "region": reg, "label": ("%d band" if isb and len(band_set) > 1 else "%d") % thk})
     pod_thk = sorted(set(b["thk"] for b in B if b["min"]))
     # sàn hạ cốt CHỈ là phần ngoài sàn chính; ô chính chưa xác định chiều dày -> để trống + báo (không thành -70)
     podium = total.difference(main_closed)
@@ -338,9 +389,21 @@ def extract(page, to_revit, zone_side, split_line: LineString, band_thickness: i
         nb = max(out, key=lambda o: p.buffer(tol_mm * 2).intersection(o["region"]).area, default=None)
         if nb is not None and p.buffer(tol_mm * 2).intersection(nb["region"]).area > 0:
             nb["region"] = unary_union([nb["region"], p])
-    podium = unary_union(keep) if keep else Polygon()
-    if pod_thk and not podium.is_empty:
-        out.append({"thickness_mm": pod_thk[0], "z_offset_mm": -step_mm, "region": podium, "label": "%d MIN (-%d)" % (pod_thk[0], step_mm)})
+    # mỗi mảnh hạ cốt lấy chiều dày vòng tròn MIN trong mảnh; trang chỉ có 1 giá trị MIN -> dùng cho mọi mảnh (L1);
+    # mảnh có nhiều giá trị / không có vòng tròn khi trang có nhiều giá trị -> báo, KHÔNG đoán
+    report["unresolved_podium"] = []
+    pods: Dict[int, list] = {}
+    for p in keep:
+        t = sorted(set(b["thk"] for b in B if b["min"] and p.contains(Point(b["x"], b["y"]))))
+        if len(t) != 1 and len(pod_thk) == 1:
+            t = pod_thk
+        if len(t) == 1:
+            pods.setdefault(t[0], []).append(p)
+        else:
+            report["unresolved_podium"].append({"area_m2": round(p.area / 1e6, 2), "at_mm": [round(p.centroid.x), round(p.centroid.y)],
+                                                "min_values": t})
+    for t in sorted(pods):
+        out.append({"thickness_mm": t, "z_offset_mm": -step_mm, "region": unary_union(pods[t]), "label": "%d MIN (-%d)" % (t, step_mm)})
     report["areas_m2"] = {o["label"]: round(o["region"].area / 1e6, 2) for o in out}
     report["total_m2"] = round(total.area / 1e6, 2)
     report["podium_thickness_values"] = pod_thk
