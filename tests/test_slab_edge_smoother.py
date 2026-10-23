@@ -48,3 +48,15 @@ def test_interlocked_ring_goes_to_neighbour_without_overlap():
     assert out[2] is None or out[2].area < 0.5e6      # vành mỏng nhập vào ban công
     assert out[0].area > math.pi * R * R / 2 * 0.99
     assert out[0].intersection(out[1]).area < 1.0
+
+
+def test_apex_tab_removed_and_arc_not_split():
+    """Tai 36 x 144 mm nhô ở đỉnh cung (vạch precast còn sót) -> cắt; cung đỉnh liền 1 mạch, không bị chẻ đôi."""
+    pts = [(R * math.cos(a), R * math.sin(a)) for a in [math.pi * i / 180 for i in range(181)]]
+    disc = Polygon(pts).buffer(0)
+    tab = box(-18, R - 20, 18, R + 144)
+    out = sm.smooth_level([disc.union(tab)])[0]
+    assert out.bounds[3] < R + 5, out.bounds                    # tai đã bị cắt
+    ring = sm.ring_with_arcs(list(out.exterior.coords))
+    arcs = [it for it in ring if "mid" in it]
+    assert len(arcs) == 1, ring                                  # 1 cung duy nhất từ đầu tới cuối
