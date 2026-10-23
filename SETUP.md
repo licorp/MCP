@@ -12,7 +12,7 @@ Thư viện này (code MCP + skills + CLAUDE.md) nằm trên GitHub. Máy nào c
 1. **Thoát hẳn Claude** (cả icon ở khay hệ thống). Claude đang chạy sẽ ghi đè `claude_desktop_config.json`.
 2. Mở PowerShell:
    ```powershell
-   git clone <LINK_REPO> C:\RevitMCP\mcp-server-for-revit-python.extension
+   git clone https://github.com/licorp/MCP.git C:\RevitMCP\mcp-server-for-revit-python.extension
    C:\RevitMCP\mcp-server-for-revit-python.extension\setup.cmd
    ```
 3. Revit: tab **pyRevit → Reload**.
