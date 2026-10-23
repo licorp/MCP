@@ -8,6 +8,34 @@
   },
   "tools": [
     {
+      "name": "align_viewports_across_sheets",
+      "description": "Aligns viewports on target sheets to a reference sheet, ignoring annotation extents."
+    },
+    {
+      "name": "auto_calibrate_grids",
+      "description": "Matches PDF drawing coordinates to Revit grids and returns calibration points, scale and error."
+    },
+    {
+      "name": "batch_create_footings_and_walls",
+      "description": "Creates footings, walls and strip footings from parsed foundation data using project types."
+    },
+    {
+      "name": "batch_create_structural_framing_and_columns",
+      "description": "Creates structural columns then beams in one transaction after preflight checks."
+    },
+    {
+      "name": "batch_create_structural_slabs",
+      "description": "Creates structural slabs and cuts openings in one transaction."
+    },
+    {
+      "name": "batch_create_structural_walls_and_foundations",
+      "description": "Creates shear walls, pile caps and pad/strip footings in one transaction."
+    },
+    {
+      "name": "check_duplicates",
+      "description": "Scans columns, beams, walls, footings and slabs for duplicated or overlapping elements."
+    },
+    {
       "name": "clear_colors",
       "description": "Removes view color overrides from elements in a category."
     },
@@ -22,6 +50,14 @@
     {
       "name": "execute_revit_code",
       "description": "Executes supplied IronPython code in Revit with the Windows user's permissions after review in Revit; code can access model data, files and network services."
+    },
+    {
+      "name": "finalize_and_join_structure",
+      "description": "Joins geometry of columns, walls, beams and slabs on a level in structural priority order."
+    },
+    {
+      "name": "generate_visual_qa_overlay",
+      "description": "Overlays modelled elements on the source PDF page and returns the image for visual QA."
     },
     {
       "name": "get_current_view_elements",
@@ -72,8 +108,20 @@
       "description": "Lists exportable model views grouped by view type."
     },
     {
+      "name": "modify_or_delete_elements",
+      "description": "Deletes or moves listed elements to fix issues found during visual QA."
+    },
+    {
       "name": "open_document",
       "description": "Opens a specified Revit document, optionally auditing or detaching it from central."
+    },
+    {
+      "name": "parse_pdf_foundation_plan",
+      "description": "Extracts shear walls, pile caps, piles and pad/strip footings from a vector PDF plan in Revit coordinates (mm)."
+    },
+    {
+      "name": "parse_pdf_structural_plan",
+      "description": "Extracts columns, beams, slabs and openings from a vector PDF plan in Revit coordinates (mm)."
     },
     {
       "name": "place_family",
@@ -86,6 +134,10 @@
     {
       "name": "sync_with_central",
       "description": "Synchronizes the active workshared model with central using requested relinquish options."
+    },
+    {
+      "name": "undo_last",
+      "description": "Undoes the last committed action in the active Revit document."
     }
   ],
   "resources": [],

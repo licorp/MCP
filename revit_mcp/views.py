@@ -6,6 +6,7 @@ Handles view export and image generation functionality
 
 from pyrevit import routes, revit, DB
 import tempfile
+import shutil
 import os
 import base64
 import json
@@ -42,7 +43,7 @@ def register_views_routes(api):
         denial = authorize_request(request, action=None)
         if denial is not None:
             return denial
-
+        output_folder = None
         try:
             if not doc:
                 return routes.make_response(
@@ -56,12 +57,7 @@ def register_views_routes(api):
             view_name = normalize_string(view_name)
             logger.info("Exporting view: {}".format(view_name))
 
-            # Define output folder in temp directory
-            output_folder = os.path.join(tempfile.gettempdir(), "RevitMCPExports")
-
-            # Create output folder if it doesn't exist
-            if not os.path.exists(output_folder):
-                os.makedirs(output_folder)
+            output_folder = tempfile.mkdtemp(prefix="RevitMCPExports-")
 
             # Create filename prefix
             file_path_prefix = os.path.join(output_folder, "export")
@@ -210,6 +206,12 @@ def register_views_routes(api):
             return routes.make_response(
                 data={"error": "Failed to export view: {}".format(str(e))}, status=500
             )
+        finally:
+            if output_folder:
+                try:
+                    shutil.rmtree(output_folder)
+                except OSError:
+                    logger.warning("Could not remove this request's temporary export directory.")
 
     @api.route("/list_views/", methods=["GET"])
     def list_views(doc, request):

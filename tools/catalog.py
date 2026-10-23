@@ -21,4 +21,18 @@ TOOL_DESCRIPTIONS = {
     "close_document": "Closes the active Revit document, optionally saving changes.",
     "save_document": "Saves the active document in place or to a specified new file.",
     "sync_with_central": "Synchronizes the active workshared model with central using requested relinquish options.",
+    # Team tools (structural PDF-to-BIM pipeline, sheets, undo)
+    "undo_last": "Undoes the last committed action in the active Revit document.",
+    "align_viewports_across_sheets": "Aligns viewports on target sheets to a reference sheet, ignoring annotation extents.",
+    "auto_calibrate_grids": "Matches PDF drawing coordinates to Revit grids and returns calibration points, scale and error.",
+    "parse_pdf_structural_plan": "Extracts columns, beams, slabs and openings from a vector PDF plan in Revit coordinates (mm).",
+    "parse_pdf_foundation_plan": "Extracts shear walls, pile caps, piles and pad/strip footings from a vector PDF plan in Revit coordinates (mm).",
+    "batch_create_structural_framing_and_columns": "Creates structural columns then beams in one transaction after preflight checks.",
+    "batch_create_footings_and_walls": "Creates footings, walls and strip footings from parsed foundation data using project types.",
+    "batch_create_structural_slabs": "Creates structural slabs and cuts openings in one transaction.",
+    "batch_create_structural_walls_and_foundations": "Creates shear walls, pile caps and pad/strip footings in one transaction.",
+    "check_duplicates": "Scans columns, beams, walls, footings and slabs for duplicated or overlapping elements.",
+    "generate_visual_qa_overlay": "Overlays modelled elements on the source PDF page and returns the image for visual QA.",
+    "modify_or_delete_elements": "Deletes or moves listed elements to fix issues found during visual QA.",
+    "finalize_and_join_structure": "Joins geometry of columns, walls, beams and slabs on a level in structural priority order.",
 }

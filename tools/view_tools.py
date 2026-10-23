@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """View-related tools for capturing and listing Revit views"""
 
+from typing import Optional
 from mcp.server.fastmcp import Context
 from .utils import format_response
 
@@ -71,7 +72,7 @@ def register_view_tools(mcp, revit_get, revit_post, revit_image):
     @mcp.tool()
     async def align_viewports_across_sheets(
         main_sheet_number: str,
-        target_sheet_numbers: list[str] = None,
+        target_sheet_numbers: Optional[list[str]] = None,
         apply_crop_scope_box: bool = True,
         align_titleblock: bool = True,
         align_legend: bool = True,
