@@ -132,10 +132,12 @@ def _orient_rect(u, buckets, cell, mm_per_pt, min_mm, max_mm, tol_pt=0.6):
 def extract_pdf_column_features(page, scale: float, drawings=None,
                                  min_mm: float = 190.0, max_mm: float = 2500.0,
                                  label_radius_mm: float = 2000.0,
-                                 area_pt=None) -> List[Dict]:
+                                 area_pt=None, include_unlabeled: bool = False) -> List[Dict]:
     """
     Trả về [{"mark", "x", "y" (point PDF), "kind": rect|circle, "b_mm" (phương X của trang),
     "h_mm" (phương Y của trang)}] cho các hình cột có mã cột trong bán kính label_radius_mm.
+    include_unlabeled=True: giữ cả hình không có nhãn (mark="") - dùng khi ghép theo TIẾT DIỆN,
+    vì bản vẽ thường không ghi mã cho từng cột.
     Mỗi hình chỉ gán 1 mã (gần nhất trước). Cột tròn: hình tròn khép kín, hoặc ô gần vuông có
     >= 12 đoạn thẳng rời nằm trên đường tròn nội tiếp. area_pt (x0, y0, x1, y1): chỉ xét trong vùng.
     """
@@ -222,6 +224,8 @@ def extract_pdf_column_features(page, scale: float, drawings=None,
         f = dict(uniq[si])
         f["mark"] = labels[li][0]
         feats.append(f)
+    if include_unlabeled:
+        feats.extend(dict(s, mark="") for si, s in enumerate(uniq) if si not in used_s)
     return feats
 
 

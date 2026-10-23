@@ -288,8 +288,9 @@ async def auto_calibrate(revit_post, pdf_path: str, page_number: int, ctx=None,
         cad_cols = cad_shapes_as_columns(revit_info.get("cad_shapes", []))
         if (cal is None or cal.get("status") != "success") and method in ("auto", "cad") \
                 and calibrate_from_columns is not None and cad_cols:
-            feats = extract_pdf_column_features(page, scale)
-            cal = calibrate_from_columns(feats, cad_cols, scale, tol_mm=cad_tol_mm)
+            # CAD shapes match by section, so PDF columns without a mark label still count.
+            cal = calibrate_from_columns(extract_pdf_column_features(page, scale, include_unlabeled=True),
+                                         cad_cols, scale, tol_mm=cad_tol_mm)
             cal["method"] = "cad"
             cal["cad_links"] = revit_info.get("cad_links", [])
             cal["nominal_scale"] = "1:{}".format(scale)
@@ -347,8 +348,9 @@ async def auto_calibrate(revit_post, pdf_path: str, page_number: int, ctx=None,
                 and calibrate_from_columns is not None:
             revit_cols = [dict(c, mark=revit_column_mark(c.get("type", ""), c.get("mark_param", "")))
                           for c in revit_info.get("columns", [])]
-            feats = feats if feats is not None else extract_pdf_column_features(page, scale)
-            cal = calibrate_from_columns(feats, revit_cols, scale)
+            # Unlabeled shapes only take part when matching by section (mark mode skips empty marks).
+            cal = calibrate_from_columns(extract_pdf_column_features(page, scale, include_unlabeled=True),
+                                         revit_cols, scale)
             cal["nominal_scale"] = "1:{}".format(scale)
             attempts.append({k: cal.get(k) for k in ("method", "status", "message", "matched_columns",
                                                      "pdf_columns_with_common_mark", "revit_columns",
