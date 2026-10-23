@@ -6,6 +6,10 @@ description: >-
   Tự động nhận diện View, Level, tọa độ, Schedule và kích thước từ PDF mà không cần người dùng nhập tham số phức tạp.
   Kích hoạt khi người dùng yêu cầu: "chuyển trang [X] vào revit", "dựng móng từ pdf trang [X]",
   "chuyển pdf trang [X] ra revit hiện hành", "dựng kết cấu trang [X]".
+  Phase 7 (hoàn thiện): dựng lan can PBS1/PC1 liền mạch theo mép sàn và đồng bộ giữa các tầng,
+  lấp lỗ sàn chỗ tường đi qua, gộp sàn, nắn nét lệch trục ("Line in Sketch is slightly off axis"),
+  hạ đỉnh tường/cột về mặt dưới sàn, join sàn-tường-cột. Kích hoạt khi: "hoàn thiện model", "lan can chưa liền",
+  "đồng bộ các tầng", "cấu kiện chưa join / rời rạc", "tường cắt qua sàn", "sửa cảnh báo off axis".
 ---
 
 # SKILL: Tự Động Dựng Mô Hình Revit Kết Cấu Từ PDF Vector Qua MCP (Chuẩn HPCE)
@@ -90,7 +94,7 @@ python script.py --pdf "C:\...\Combined set_1.pdf" --page 19 --zone A --level "B
 
 ---
 
-## 3. QUY TRÌNH THỰC THI 6 GIAI ĐOẠN (6-PHASE WORKFLOW)
+## 3. QUY TRÌNH THỰC THI 6 GIAI ĐOẠN (6-PHASE WORKFLOW) + Phase 7 hoàn thiện
 
 ```mermaid
 flowchart TD
@@ -232,6 +236,33 @@ Sau khi hoàn tất Visual QA, AI Agent BẮT BUỘC gọi MCP tool `finalize_an
    | **3** | **Dầm phụ (Secondary Beam)** (`OST_StructuralFraming` - $h$ nhỏ) | Bị **Dầm chính cắt** tại vị trí giao nhau |
    | **4 (Thấp nhất)** | **Sàn kết cấu** (`OST_Floors`) | Bị **Cột, Vách cứng và Dầm** chiếm chỗ |
 3. **Chặn sạch Modal Warnings (`MCPAutoFailureSwallower`):** Tự động bỏ qua các cảnh báo trùng Mark, lệch trục nhẹ, hoặc gỡ bỏ các cặp phần tử "joined but do not intersect" để bảng Warning của Revit sạch sẽ 100%.
+
+### Phase 7: Hoàn thiện mô hình (Finishing) — lan can, khép kín, đồng bộ tầng, join, sạch cảnh báo
+Bộ script: `.agents/skills/pdf-to-bim/scripts/finishing/` (CPython phân tích bản vẽ + `revit/` IronPython chạy trong Revit).
+Cấu hình dự án: `.agents/projects/<mã>/finishing_config.json` (PDF, các tờ: trang, 2 điểm hiệu chuẩn, level, khung cắt ảnh, `mirror_x`).
+Chạy từ gốc repo: `python <finishing>/<script>.py` (CPython) và `python <finishing>/run_code.py <finishing>/revit/<x>.py "<mô tả>" notx [dry]` (Revit).
+
+**Luôn làm trước:** `revit/save_doc.py` (lưu) trước mọi bước dựng lại hàng loạt; mọi Transaction dựng lại gắn `IFailuresPreprocessor` xóa Warning — nếu không Revit hiện hộp thoại và treo MCP (người dùng phải đóng tay).
+
+**Thứ tự chuẩn (làm 1 lần cho mọi tầng, không vá từng tầng):**
+1. Xuất dữ liệu: `revit/export_slabs_arcs.py` (sàn PDF2BIM, giữ cung) · `revit/export_slabs_fill.py` (kèm sàn FILL) · `revit/export_walls_pts.py` · `revit/export_walls_full.py` · `revit/export_rails.py` (PBS1/PC1/US1 kèm cung).
+2. Lan can mép sàn: `edge_runs.py [Sxxx ...]` — lấy mẫu mép sàn mỗi 50 mm, 2 nét song song cách **150 = PBS1**, (180 = PC1 chỉ tham khảo, hay bắt nhầm lõi/cột/RW), gom đoạn liên tục, giữ cung, nối góc. Lọc: chỉ biên NGOÀI sàn (bỏ biên lỗ), bỏ đoạn chạy dọc tường W/SW/LW (≤260 mm).
+3. Khe giữa 2 đầu PBS1 có nhãn PC1/PC2 gần → `pc1_gaps.py` (PC1 180, cao hết tầng; mái → PARAPET). Góc PC1 cong không bắt được → đo tay cặp cung đồng tâm ΔR≈180 quanh nhãn (`fwx.pdf_circle_hints`), góc lặp lại giữa các ban công giống nhau thì suy bằng tịnh tiến.
+4. **Đồng bộ các tầng:** `rail_template.py` gộp lan can L2+L3 thành mẫu chung mỗi nhà (khử trùng hausdorff < 80 mm, đối xứng ban công theo `mirror_x`) rồi áp cho từng tầng ở đoạn nằm trên mép ngoài sàn tầng đó → xóa PBS1/PC1 cũ của tầng và dựng lại trong 1 transaction. Sau đó so L2↔L3: đoạn có ở tầng này mà thiếu ở tầng kia nhưng có sàn bên dưới → bổ sung. Chỗ bản vẽ hai tầng khác nhau thì GIỮ theo bản vẽ. `render_runs.py <json> <png>` vẽ đề xuất lên các tờ để duyệt.
+5. Sau dựng lan can: `revit/dedupe_rails.py` (xóa đoạn trùng khi có "walls overlap"), `revit/snap_warn.py` (nắn tường lệch trục), `revit/keep_stacked_walls.py` (tường đè tường dưới → chân về 0).
+6. Lỗ/khe sàn chỗ tường đi qua: `slab_gaps.py` (khe ≥0,02 m² kín ≥70% chu vi, có tường đi qua) → lấp theo loại/cao độ sàn bên cạnh; `slab_gaps2.py` (tính cả sàn FILL, lấp theo sàn THẤP hơn khi lỗ nằm ở bậc 70). **Không buffer +5 mm** cho sàn lấp (gây "floors overlap").
+7. Gộp sàn: `merge_fillers.py` → `revit/merge_fillers_apply.py` (gộp sàn FILL vào sàn chính cùng loại/cao độ); `merge_snap_plan.py [offaxis]` → `revit/merge_snap_apply.py` (gộp sàn liền kề cùng tầng/loại/cao độ + **nắn trục theo nhóm đỉnh** union-find: cạnh lệch < 0,6° dùng chung X/Y → hết "Line in Sketch is slightly off axis"). `revit/offaxis_floors.py` lấy id sàn còn cảnh báo để chạy lại với tham số `offaxis`.
+8. Tường/cột không lộ trên mặt sàn: `revit/fix_tops_bases.py` (đỉnh/chân lệch 60–80 → −70 theo sàn MIN), `revit/tops_to_soffit.py` (đỉnh tường/cột dừng ở **mặt dưới** sàn cao nhất mà nó gặp, tính cả sàn hạ cốt thấp hơn ≤120 mm; bỏ qua tường UPSTAND/PBS1).
+9. Join: `revit/join_overlaps.py` (sàn chồng sàn) → `revit/join_floor_hosts_safe.py` (sàn ↔ tường/cột, có failure handler) → `revit/unjoin_noint.py`. Cặp còn lại Revit tự gỡ sau commit (chỉ chạm mặt) là bình thường.
+10. Kiểm tra: `revit/warn_summary.py`; ảnh 3D `revit/export3d.py` (ImageExport PixelSize lớn, cắt viền trắng bằng PIL vì FitToPage lấy theo toàn bộ model).
+
+**Bài học (250793):**
+- Revit: 1 tường = 1 đoạn thẳng/cung → lan can là chuỗi tường nối đầu; phải nối khít đầu mút và đồng bộ tầng ngay từ đầu, không vá từng tầng.
+- Ký hiệu trên mặt bằng tầng N: `(o)` = từ tầng N lên, `(u)` = tầng dưới, không hậu tố = có ở tầng N. Tường/cột L→mái lấy theo nhãn trên tờ L3 và đối chiếu `(u)` trên tờ mái; nếu khớp tường tầng dưới thì CHÉP hình học tường dưới.
+- Mặt bằng mái có thể vẽ sàn tới mặt TRONG parapet → nới sàn ra mặt ngoài (~177 mm) trước khi dò PBS1; nét parapet có thể là xám 0,67/0,6.
+- Mọi vòng tròn ở mái ghi "MIN" nhưng không có nét bậc → không hạ −70.
+- Nhãn "W1(o)" bao quanh bồn cây có thể chính là tường W1 cong đã dựng → kiểm tra trùng (`duplicate_check`) trước khi thêm US1.
+- `IronPython`: ghi file bằng `with open` (không thì JSON bị cắt), không dùng list-comprehension có `print`.
 
 ---
 
