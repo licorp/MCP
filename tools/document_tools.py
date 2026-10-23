@@ -93,3 +93,15 @@ def register_document_tools(mcp, revit_get, revit_post):
         }
         response = await revit_post("/sync_with_central/", data, ctx, timeout=120.0)
         return format_response(response)
+
+    @mcp.tool()
+    async def undo_last(
+        ctx: Context = None,
+    ) -> str:
+        """Undo the last committed action or transaction in the active Revit document.
+
+        Posts the native Revit Undo command to the UI thread, reverting the most
+        recent operation while preserving document integrity.
+        """
+        response = await revit_post("/undo_last/", {}, ctx)
+        return format_response(response)

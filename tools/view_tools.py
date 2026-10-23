@@ -67,3 +67,35 @@ def register_view_tools(mcp, revit_get, revit_post, revit_image):
         }
         response = await revit_post("/current_view_elements/", data, ctx)
         return format_response(response)
+
+    @mcp.tool()
+    async def align_viewports_across_sheets(
+        main_sheet_number: str,
+        target_sheet_numbers: list[str] = None,
+        apply_crop_scope_box: bool = True,
+        align_titleblock: bool = True,
+        align_legend: bool = True,
+        ctx: Context = None,
+    ) -> str:
+        """
+        Align Viewports across sheets using the proven Erik Frits Temporary-Hide algorithm.
+        Eliminates viewport bounding-box offset caused by grid extensions, dimensions, and annotations.
+
+        Args:
+            main_sheet_number: Sheet number of the reference sheet (e.g. 'A101' or 'S-101').
+            target_sheet_numbers: List of sheet numbers to align to the reference sheet. If None or empty, aligns all other sheets.
+            apply_crop_scope_box: Whether to apply the same Scope Box or Crop Shape from the reference view to target views.
+            align_titleblock: Whether to align TitleBlock origin to XYZ(0,0,0).
+            align_legend: Whether to align matching Legend viewports on target sheets.
+        """
+        if ctx:
+            await ctx.info(f"Aligning viewports relative to sheet {main_sheet_number}...")
+        payload = {
+            "main_sheet_number": main_sheet_number,
+            "target_sheet_numbers": target_sheet_numbers or [],
+            "apply_crop_scope_box": apply_crop_scope_box,
+            "align_titleblock": align_titleblock,
+            "align_legend": align_legend,
+        }
+        response = await revit_post("/align_viewports/", payload, ctx)
+        return format_response(response)

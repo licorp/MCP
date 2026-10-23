@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 def register_status_routes(api):
     """Register all status-related routes with the API"""
     
+    @api.route('/', methods=["GET"])
     @api.route('/status/', methods=["GET"])
     def revit_status(doc, request):
         """

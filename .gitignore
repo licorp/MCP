@@ -11,7 +11,12 @@ wheels/
 
 *TODO.md
 .env
-CLAUDE.md
+# CLAUDE.md is shared on purpose (team rules)
 .mcp.json
 # Local test/audit artifacts
 .pytest_cache/
+
+# Skill scratch / caches
+.agents/cache/
+.agents/skills/*/tmp/
+dist/

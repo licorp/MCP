@@ -423,4 +423,32 @@ def register_document_routes(api):
                 status=500,
             )
 
+    @api.route("/undo_last/", methods=["POST"])
+    def undo_last(doc, request):
+        """
+        Undo the last committed transaction or action in Revit UI.
+        """
+        try:
+            uiapp = revit.HOST_APP.uiapp
+            undo_cmd_id = RevitCommandId.LookupPostableCommandId(PostableCommand.Undo)
+            if uiapp and uiapp.CanPostCommand(undo_cmd_id):
+                uiapp.PostCommand(undo_cmd_id)
+                return routes.make_response(
+                    data={
+                        "status": "success",
+                        "message": "Successfully posted Undo command to Revit UI.",
+                    }
+                )
+            else:
+                return routes.make_response(
+                    data={"error": "Revit cannot execute Undo at this moment."},
+                    status=400,
+                )
+        except Exception as e:
+            logger.error("Failed to execute Undo: {}".format(str(e)))
+            return routes.make_response(
+                data={"error": "Failed to execute Undo: {}".format(str(e))},
+                status=500,
+            )
+
     logger.info("Document management routes registered successfully")

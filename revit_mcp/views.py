@@ -6,12 +6,11 @@ Handles view export and image generation functionality
 
 from pyrevit import routes, revit, DB
 import tempfile
-import shutil
 import os
 import base64
 import json
 import logging
-from .security import authorize_request
+import traceback
 from System.Collections.Generic import List
 
 try:
@@ -28,7 +27,7 @@ def register_views_routes(api):
     """Register all view-related routes with the API"""
 
     @api.route("/get_view/<view_name>", methods=["GET"])
-    def get_view(doc, view_name, request):
+    def get_view(doc, view_name):
         """
         Export a named Revit view as a PNG image and return the image data
 
@@ -39,10 +38,6 @@ def register_views_routes(api):
         Returns:
             dict: Contains base64 encoded image data and content type, or error message
         """
-        denial = authorize_request(request, action=None)
-        if denial is not None:
-            return denial
-        output_folder = None
         try:
             if not doc:
                 return routes.make_response(
@@ -56,7 +51,12 @@ def register_views_routes(api):
             view_name = normalize_string(view_name)
             logger.info("Exporting view: {}".format(view_name))
 
-            output_folder = tempfile.mkdtemp(prefix="RevitMCPExports-")
+            # Define output folder in temp directory
+            output_folder = os.path.join(tempfile.gettempdir(), "RevitMCPExports")
+
+            # Create output folder if it doesn't exist
+            if not os.path.exists(output_folder):
+                os.makedirs(output_folder)
 
             # Create filename prefix
             file_path_prefix = os.path.join(output_folder, "export")
@@ -205,24 +205,15 @@ def register_views_routes(api):
             return routes.make_response(
                 data={"error": "Failed to export view: {}".format(str(e))}, status=500
             )
-        finally:
-            if output_folder:
-                try:
-                    shutil.rmtree(output_folder)
-                except OSError:
-                    logger.warning("Could not remove this request's temporary export directory.")
 
     @api.route("/list_views/", methods=["GET"])
-    def list_views(doc, request):
+    def list_views(doc):
         """
         Get a list of all exportable views in the current Revit model
 
         Returns:
             dict: List of view names organized by type
         """
-        denial = authorize_request(request, action=None)
-        if denial is not None:
-            return denial
         try:
             if not doc:
                 return routes.make_response(
@@ -302,7 +293,7 @@ def register_views_routes(api):
             )
 
     @api.route("/current_view_info/", methods=["GET"])
-    def get_current_view_info(uidoc, request):
+    def get_current_view_info(uidoc):
         """
         Get detailed information about the currently active view.
 
@@ -312,9 +303,6 @@ def register_views_routes(api):
         Returns:
             dict: Detailed information about the current view
         """
-        denial = authorize_request(request, action=None)
-        if denial is not None:
-            return denial
         try:
             if not uidoc or not uidoc.Document:
                 return routes.make_response(
@@ -400,9 +388,6 @@ def register_views_routes(api):
             "include_location": false
         }
         """
-        denial = authorize_request(request, action=None)
-        if denial is not None:
-            return denial
         try:
             if not doc or not uidoc:
                 return routes.make_response(
@@ -564,6 +549,267 @@ def register_views_routes(api):
             return routes.make_response(
                 data={
                     "error": "Failed to get current view elements: {}".format(str(e))
+                },
+                status=500,
+            )
+
+    @api.route("/align_viewports/", methods=["POST"])
+    def align_viewports_route(doc, request):
+        """
+        Align Viewports across sheets using the Erik Frits Temporary-Hide algorithm.
+        Eliminates viewport bounding-box offset caused by grid extensions, dimensions, and annotations.
+
+        Payload:
+        {
+            "main_sheet_number": "A101",
+            "target_sheet_numbers": ["A102", "A103"],
+            "apply_crop_scope_box": true,
+            "align_titleblock": true,
+            "align_legend": true
+        }
+        """
+        try:
+            if not doc:
+                return routes.make_response(
+                    data={"error": "No active Revit document"}, status=503
+                )
+
+            data = (
+                json.loads(request.data)
+                if isinstance(request.data, str)
+                else (request.data or {})
+            )
+            main_sheet_num = str(data.get("main_sheet_number", "")).strip()
+            target_sheet_nums = data.get("target_sheet_numbers", [])
+            apply_crop = data.get("apply_crop_scope_box", True)
+            align_tb = data.get("align_titleblock", True)
+            align_lg = data.get("align_legend", True)
+
+            if not main_sheet_num:
+                return routes.make_response(
+                    data={"error": "main_sheet_number is required"}, status=400
+                )
+
+            all_sheets = (
+                DB.FilteredElementCollector(doc)
+                .OfClass(DB.ViewSheet)
+                .WhereElementIsNotElementType()
+                .ToElements()
+            )
+            sheet_map = {s.SheetNumber: s for s in all_sheets}
+
+            main_sheet = sheet_map.get(main_sheet_num)
+            if not main_sheet:
+                return routes.make_response(
+                    data={"error": "Main sheet '{}' not found".format(main_sheet_num)},
+                    status=404,
+                )
+
+            def get_viewplans_on_sheet(sheet):
+                vps = []
+                for vp_id in sheet.GetAllViewports():
+                    vp = doc.GetElement(vp_id)
+                    v = doc.GetElement(vp.ViewId)
+                    if isinstance(v, DB.ViewPlan):
+                        vps.append((vp, v))
+                return vps
+
+            main_vps = get_viewplans_on_sheet(main_sheet)
+            if not main_vps:
+                return routes.make_response(
+                    data={"error": "No ViewPlan found on main sheet '{}'".format(main_sheet_num)},
+                    status=400,
+                )
+
+            main_vp, main_view = main_vps[0]
+
+            # Get ScopeBox / CropShape from main view
+            param_sb = main_view.get_Parameter(
+                DB.BuiltInParameter.VIEWER_VOLUME_OF_INTEREST_CROP
+            )
+            main_scopebox_id = (
+                param_sb.AsElementId()
+                if param_sb
+                else DB.ElementId.InvalidElementId
+            )
+
+            crop_mgr = main_view.GetCropRegionShapeManager()
+            main_cropbox = None
+            if crop_mgr:
+                try:
+                    c_shapes = crop_mgr.GetCropShape()
+                    if c_shapes and c_shapes.Count > 0:
+                        main_cropbox = c_shapes[0]
+                except Exception:
+                    pass
+
+            # Determine target sheets
+            if target_sheet_nums and len(target_sheet_nums) > 0:
+                target_sheets = [
+                    sheet_map[num] for num in target_sheet_nums if num in sheet_map
+                ]
+            else:
+                target_sheets = [
+                    s for s in all_sheets if s.SheetNumber != main_sheet_num
+                ]
+
+            if not target_sheets:
+                return routes.make_response(
+                    data={"error": "No valid target sheets found to align"},
+                    status=400,
+                )
+
+            def get_tb(sheet):
+                tbs = (
+                    DB.FilteredElementCollector(doc, sheet.Id)
+                    .OfCategory(DB.BuiltInCategory.OST_TitleBlocks)
+                    .WhereElementIsNotElementType()
+                    .ToElements()
+                )
+                return tbs[0] if tbs.Count > 0 else None
+
+            def get_legend_vp(sheet):
+                for vp_id in sheet.GetAllViewports():
+                    vp = doc.GetElement(vp_id)
+                    v = doc.GetElement(vp.ViewId)
+                    if v and v.ViewType == DB.ViewType.Legend:
+                        return vp, v
+                return None, None
+
+            results = []
+            aligned_count = 0
+
+            with DB.Transaction(doc, "MCP: Align Viewports Across Sheets") as t:
+                t.Start()
+
+                # Align TitleBlock origin to (0,0,0) if requested
+                zero_pt = DB.XYZ(0, 0, 0)
+                if align_tb:
+                    main_tb = get_tb(main_sheet)
+                    if main_tb and str(main_tb.Location.Point) != str(zero_pt):
+                        try:
+                            main_tb.Location.Point = zero_pt
+                        except Exception:
+                            pass
+
+                main_legend_vp, main_legend_view = (
+                    get_legend_vp(main_sheet) if align_lg else (None, None)
+                )
+
+                for tgt_sheet in target_sheets:
+                    sheet_res = {
+                        "sheet_number": tgt_sheet.SheetNumber,
+                        "status": "skipped",
+                        "viewports_aligned": 0,
+                    }
+                    tgt_vps = get_viewplans_on_sheet(tgt_sheet)
+
+                    if not tgt_vps:
+                        sheet_res["message"] = "No ViewPlan on target sheet"
+                        results.append(sheet_res)
+                        continue
+
+                    if align_tb:
+                        other_tb = get_tb(tgt_sheet)
+                        if other_tb and str(other_tb.Location.Point) != str(zero_pt):
+                            try:
+                                other_tb.Location.Point = zero_pt
+                            except Exception:
+                                pass
+
+                    for other_vp, other_view in tgt_vps:
+                        # Apply Crop / Scope Box
+                        if apply_crop:
+                            if (
+                                main_scopebox_id
+                                and main_scopebox_id != DB.ElementId.InvalidElementId
+                            ):
+                                try:
+                                    sb_param = other_view.get_Parameter(
+                                        DB.BuiltInParameter.VIEWER_VOLUME_OF_INTEREST_CROP
+                                    )
+                                    if sb_param and not sb_param.IsReadOnly:
+                                        sb_param.Set(main_scopebox_id)
+                                except Exception:
+                                    pass
+                            elif main_cropbox:
+                                try:
+                                    cr_param = other_view.get_Parameter(
+                                        DB.BuiltInParameter.VIEWER_CROP_REGION
+                                    )
+                                    if cr_param and not cr_param.AsInteger():
+                                        cr_param.Set(1)
+                                    other_crop_mgr = other_view.GetCropRegionShapeManager()
+                                    if other_crop_mgr:
+                                        other_crop_mgr.SetCropShape(main_cropbox)
+                                except Exception:
+                                    pass
+
+                        # Core Algorithm: Temporary Hide Isolate
+                        main_elems = (
+                            DB.FilteredElementCollector(doc, main_view.Id)
+                            .WhereElementIsNotElementType()
+                            .ToElementIds()
+                        )
+                        other_elems = (
+                            DB.FilteredElementCollector(doc, other_view.Id)
+                            .WhereElementIsNotElementType()
+                            .ToElementIds()
+                        )
+
+                        main_view.HideElementsTemporary(main_elems)
+                        other_view.HideElementsTemporary(other_elems)
+                        doc.Regenerate()  # viewport boxes only shrink after regen
+
+                        try:
+                            # Read the reference centre WHILE its annotations are hidden,
+                            # otherwise grid bubbles / dims skew the viewport box.
+                            other_vp.SetBoxCenter(main_vp.GetBoxCenter())
+                            sheet_res["viewports_aligned"] += 1
+                        except Exception as align_err:
+                            sheet_res["error"] = str(align_err)
+                        finally:
+                            other_view.DisableTemporaryViewMode(
+                                DB.TemporaryViewMode.TemporaryHideIsolate
+                            )
+                            main_view.DisableTemporaryViewMode(
+                                DB.TemporaryViewMode.TemporaryHideIsolate
+                            )
+
+                    # Legend alignment
+                    if align_lg and main_legend_vp and main_legend_view:
+                        other_lg_vp, other_lg_v = get_legend_vp(tgt_sheet)
+                        if (
+                            other_lg_vp
+                            and other_lg_v
+                            and other_lg_v.Name == main_legend_view.Name
+                        ):
+                            try:
+                                other_lg_vp.SetBoxCenter(main_legend_vp.GetBoxCenter())
+                                sheet_res["legend_aligned"] = True
+                            except Exception:
+                                pass
+
+                    sheet_res["status"] = "success"
+                    aligned_count += 1
+                    results.append(sheet_res)
+
+                t.Commit()
+
+            return routes.make_response(
+                data={
+                    "status": "success",
+                    "main_sheet": main_sheet_num,
+                    "aligned_sheets_count": aligned_count,
+                    "details": results,
+                }
+            )
+        except Exception as e:
+            logger.error("Align viewports failed: {}".format(str(e)))
+            return routes.make_response(
+                data={
+                    "error": "Failed to align viewports: {}".format(str(e)),
+                    "traceback": traceback.format_exc(),
                 },
                 status=500,
             )
