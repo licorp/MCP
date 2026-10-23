@@ -187,6 +187,8 @@ Chạy script [`slab_and_opening_parser.py`](file:///c:/Users/Admin/AppData/Roam
 
 > **Sàn hạ cốt (MIN, z_offset âm) -> chỉnh cột/tường theo:** cột/tường có ĐỈNH chạm sàn hạ cốt phải đặt Top Offset = z_offset (vd −70), cột/tường có CHÂN đứng trên sàn hạ cốt đặt Base Offset = z_offset; nếu không, cấu kiện nhô/hở 70 mm (lỗi gặp ở 250793 L1/L2: 40 đỉnh cột, 28 chân cột, 36 tường). Kiểm tra sau mỗi tầng: so đỉnh/chân từng cột, tường với mặt trên tấm sàn tại vị trí đó (|chênh| ≤ 2 mm; −100 ở GF là chân cắm móng, cố ý).
 
+> **Viền sàn răng lược / cung gấp khúc -> `slab_edge_smoother.py`:** vạch ký hiệu precast (PBS1) dọc mép ban công tròn làm viền bóc tách đi theo từng vạch (khấc ~40x130 mm mỗi 150 mm), vành 150 mm bị chia xen kẽ giữa 2 tấm. Trước khi dựng: `smooth_level(polys)` theo TỪNG LEVEL (không gộp tầng trệt: móng băng chồng sàn theo phương đứng là hợp lệ), rồi `ring_with_arcs(ring)` -> đỉnh có `mid` = cạnh là CUNG (Arc.Create(p0, p1, mid)). Sau khi dựng: Join Geometry các cặp 'floors overlap' do cung phình 1-3 mm; tường ĐỨNG TRÊN tường (lõi thang liên tục) giữ chân tại level, không hạ theo sàn MIN. Kiểm chứng 250793 L1/L2 (23/10): răng 2 390 -> ~600 (còn lại là khấc tường/cột thật), 85 cung, mất sàn <= 1,6 m²/tầng.
+
 ### Phase 5: Đẩy dữ liệu qua Revit MCP & Kiểm tra Trực quan Tự sửa lỗi (Visual QA & Self-Correction Loop)
 1. **Đẩy dữ liệu qua Revit MCP:**
    - `batch_create_footings_and_walls` (**ưu tiên cho mặt bằng móng**): Móng đơn / Tường / Móng băng theo loại có sẵn của dự án — xem Phase 2B. Tool cũ `batch_create_structural_walls_and_foundations` tự tạo loại chung (RC Shear Wall, Floor móng) nên chỉ dùng khi dự án chưa có loại theo mã.

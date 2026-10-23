@@ -62,6 +62,7 @@ Gộp từ 3 phiên chat (20–22/10/2026). Đọc file này + `project_summary.
   (200 MIN hạ 70). 0 trùng, không cảnh báo chồng sàn. Script: l2_lobby.py (C:\RevitMCP-work).
 - Ô trống còn lại là LỖ MỞ đúng: giếng trời (X), lõi thang SW1/SW2, hố thang máy LW1.
 - Sửa (23/10): cột/tường gặp sàn hạ cốt MIN nhô/hở 70 mm -> Top Offset −70 cho 40 cột + 33 tường, Base Offset −70 cho 28 cột + 3 tường. Kiểm tra lại: mọi đỉnh/chân khớp mặt sàn (trừ −100 chân cắm móng GF).
+- Làm trơn viền sàn (23/10): 63 tấm L1/L2 dựng lại bằng slab_edge_smoother (răng lược ban công -> cung thật; 66 tấm, 2 vành mỏng 330/370 nhập vào ban công); join 3 cặp chồng nhỏ; tường SW1 1916745 giữ chân tại level (đứng trên tường GF).
 - Chờ người dùng xác nhận: ban công PBS1 không có vòng số - S210 góc trên trái 17,7 m², S211 giữa dưới 12,2 m²
   (ban công kề bên là 200 MIN).
 - Còn lại: L3 (S213/S214) cột-tường-sàn, mái (S216/S217); thiếu cột L3->mái (A: CC1B 1, CC4B 8, CC6 1; B: CC1B 1, CC4B 5).
