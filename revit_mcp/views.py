@@ -19,6 +19,7 @@ except ImportError:
     from urllib import unquote
 
 from .utils import normalize_string, get_element_name, element_id_value
+from .security import authorize_request
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ def register_views_routes(api):
     """Register all view-related routes with the API"""
 
     @api.route("/get_view/<view_name>", methods=["GET"])
-    def get_view(doc, view_name):
+    def get_view(doc, view_name, request):
         """
         Export a named Revit view as a PNG image and return the image data
 
@@ -38,6 +39,10 @@ def register_views_routes(api):
         Returns:
             dict: Contains base64 encoded image data and content type, or error message
         """
+        denial = authorize_request(request, action=None)
+        if denial is not None:
+            return denial
+
         try:
             if not doc:
                 return routes.make_response(
@@ -207,13 +212,17 @@ def register_views_routes(api):
             )
 
     @api.route("/list_views/", methods=["GET"])
-    def list_views(doc):
+    def list_views(doc, request):
         """
         Get a list of all exportable views in the current Revit model
 
         Returns:
             dict: List of view names organized by type
         """
+        denial = authorize_request(request, action=None)
+        if denial is not None:
+            return denial
+
         try:
             if not doc:
                 return routes.make_response(
@@ -293,7 +302,7 @@ def register_views_routes(api):
             )
 
     @api.route("/current_view_info/", methods=["GET"])
-    def get_current_view_info(uidoc):
+    def get_current_view_info(uidoc, request):
         """
         Get detailed information about the currently active view.
 
@@ -303,6 +312,10 @@ def register_views_routes(api):
         Returns:
             dict: Detailed information about the current view
         """
+        denial = authorize_request(request, action=None)
+        if denial is not None:
+            return denial
+
         try:
             if not uidoc or not uidoc.Document:
                 return routes.make_response(
@@ -388,6 +401,10 @@ def register_views_routes(api):
             "include_location": false
         }
         """
+        denial = authorize_request(request, action=None)
+        if denial is not None:
+            return denial
+
         try:
             if not doc or not uidoc:
                 return routes.make_response(
@@ -568,6 +585,10 @@ def register_views_routes(api):
             "align_legend": true
         }
         """
+        denial = authorize_request(request, action='Align viewports across sheets')
+        if denial is not None:
+            return denial
+
         try:
             if not doc:
                 return routes.make_response(

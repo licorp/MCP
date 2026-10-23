@@ -428,6 +428,10 @@ def register_document_routes(api):
         """
         Undo the last committed transaction or action in Revit UI.
         """
+        denial = authorize_request(request, action='Undo the last change')
+        if denial is not None:
+            return denial
+
         try:
             uiapp = revit.HOST_APP.uiapp
             undo_cmd_id = RevitCommandId.LookupPostableCommandId(PostableCommand.Undo)

@@ -12,7 +12,7 @@ def authorize_request(request, action=None):
     if isinstance(request.data, dict) and "callbackUrl" in request.data:
         request.data.pop("callbackUrl", None)
         return routes.make_response(data={"error": "Callbacks are not supported."}, status=400)
-    if not validate_request(request.headers):
+    if not validate_request(request.headers, getattr(request, "query_params", None)):
         return routes.make_response(data={"error": "Bridge is disconnected or pairing is invalid."}, status=401)
     if action:
         from pyrevit import forms

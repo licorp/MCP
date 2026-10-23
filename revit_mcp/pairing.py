@@ -101,7 +101,15 @@ def authorization_headers():
     return {"Authorization": "Bearer " + get_token()}
 
 
-def validate_request(headers):
+TOKEN_QUERY_PARAM = "mcp_token"
+
+
+def authorization_params():
+    """Same secret as a query parameter: pyRevit 7 routes drop HTTP headers."""
+    return {TOKEN_QUERY_PARAM: get_token()}
+
+
+def validate_request(headers, query_params=None):
     """Reject browser-originated requests and authenticate a paired client."""
     import hmac
     normalized = dict((str(k).lower(), str(v)) for k, v in headers.items())
@@ -112,6 +120,8 @@ def validate_request(headers):
     except PairingError:
         return False
     actual = normalized.get("authorization", "")
+    if not actual and query_params and query_params.get(TOKEN_QUERY_PARAM):
+        actual = "Bearer " + str(query_params.get(TOKEN_QUERY_PARAM))
     # IronPython 2 may not provide compare_digest.
     if hasattr(hmac, "compare_digest"):
         try:

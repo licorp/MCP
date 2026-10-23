@@ -2083,7 +2083,7 @@ else:
         output_png_path: str = "qa_overlay_result.png",
         grid_step_mm: int = 5000,
         ctx: Context = None
-    ) -> Union[MCPImage, str]:
+    ):  # no return annotation: FastMCP cannot build a schema for Union[Image, str]
         """
         Lay toan bo cau kien vua dung tren tang `level_name` tu Revit, ve chong (Overlay)
         len trang ban ve PDF goc kem luoi toa do (X, Y) va ElementId, tra ve anh MCPImage

@@ -27,7 +27,8 @@ class ReviewedTools:
                 return await function(*args, **arguments)
 
             name = function.__name__
-            kwargs["description"] = TOOL_DESCRIPTIONS[name]
+            # Team tools added outside the catalog fall back to their docstring.
+            kwargs["description"] = TOOL_DESCRIPTIONS.get(name) or (function.__doc__ or name).strip()
             kwargs["annotations"] = ToolAnnotations(
                 readOnlyHint=name in READ_ONLY,
                 destructiveHint=name not in READ_ONLY,
