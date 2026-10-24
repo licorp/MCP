@@ -10,6 +10,9 @@ description: >-
   lấp lỗ sàn chỗ tường đi qua, gộp sàn, nắn nét lệch trục ("Line in Sketch is slightly off axis"),
   hạ đỉnh tường/cột về mặt dưới sàn, join sàn-tường-cột. Kích hoạt khi: "hoàn thiện model", "lan can chưa liền",
   "đồng bộ các tầng", "cấu kiện chưa join / rời rạc", "tường cắt qua sàn", "sửa cảnh báo off axis".
+  Phase 8 (ghi chú): tag + dim mặt bằng marking plan / footing marking plan tránh va chạm (tag không đè cấu kiện,
+  không chồng nhau), lưu sau mỗi view, xuất ảnh. Kích hoạt khi: "tag và dim", "dim tag đi", "ghi chú marking plan",
+  "tag móng", "tag tránh va chạm".
 ---
 
 # SKILL: Tự Động Dựng Mô Hình Revit Kết Cấu Từ PDF Vector Qua MCP (Chuẩn HPCE)
@@ -94,7 +97,7 @@ python script.py --pdf "C:\...\Combined set_1.pdf" --page 19 --zone A --level "B
 
 ---
 
-## 3. QUY TRÌNH THỰC THI 6 GIAI ĐOẠN (6-PHASE WORKFLOW) + Phase 7 hoàn thiện
+## 3. QUY TRÌNH THỰC THI 6 GIAI ĐOẠN (6-PHASE WORKFLOW) + Phase 7 hoàn thiện + Phase 8 tag/dim
 
 ```mermaid
 flowchart TD
@@ -263,6 +266,48 @@ Chạy từ gốc repo: `python <finishing>/<script>.py` (CPython) và `python <
 - Mọi vòng tròn ở mái ghi "MIN" nhưng không có nét bậc → không hạ −70.
 - Nhãn "W1(o)" bao quanh bồn cây có thể chính là tường W1 cong đã dựng → kiểm tra trùng (`duplicate_check`) trước khi thêm US1.
 - `IronPython`: ghi file bằng `with open` (không thì JSON bị cắt), không dùng list-comprehension có `print`.
+
+### Phase 8: Tag + Dim mặt bằng marking plan tránh va chạm (Annotation)
+Script: `scripts/finishing/annotate_views.py` (CPython điều phối) + `revit/annotate_marking.py`, `revit/annotate_footing.py`, `revit/prep_marking_views.py`, `revit/export_view_png.py`, `revit/export_columns.py`, `crop_png.py`, `pdf_text_obstacles.py`.
+
+**Chạy (1 lệnh, lưu sau mỗi view, xuất ảnh đã cắt viền vào `.agents/cache/marking/`):**
+```bash
+python .agents/skills/pdf-to-bim/scripts/finishing/annotate_views.py Project1 "BUILDING A - LEVEL 01 - MARKING PLAN" "BUILDING A - FOOTING MARKING PLAN" --prep
+```
+`DOC_TITLE` (tham số đầu) bắt buộc khi Revit mở nhiều file (vd file mẫu Yarralumla đang active) — chỉ ghi vào file này, file mẫu chỉ đọc. Tham số riêng lẻ: `run_code.py <x>.py "<mô tả>" notx 'DOC_TITLE="Project1"' 'VIEW_NAMES=["..."]'`; script lâu đặt `RUN_TIMEOUT=2400` (hết timeout phía client nhưng Revit vẫn chạy xong và commit).
+
+**Quy tắc bắt buộc của người dùng:** tag/dim KHÔNG đè lên cấu kiện, các tag KHÔNG chồng nhau. Không có chỗ trống thì BỎ tag (đếm `skip`) chứ không đặt đè.
+
+**Chuẩn bị view (`prep_marking_views.py`, theo mẫu Yarralumla HPCE-GA-OVER-100):** view range theo level của chính view (`PlanViewRange.Current`): top 1500 / cut 1200 / bottom −1200 / depth −1600 (đặt cả 4 mặt, không thì "Plan view range is not valid"); bật Floors trong template; nới crop bao cấu kiện +2 m. Crop do Scope Box quản thì API không nới được → báo người dùng kéo scope box.
+
+**Tag tầng (`annotate_marking.py`)** — họ tag HPCE:
+- Tường `HPCE_Wall+Cm_TypeMark Tag`: WALL MARK / WALL OVER (o) / WALL MARK (u); cột `HPCE_Column_Mark Tag` (đọc instance Mark): COLUMN / COLUMN OVER / COLUMN UNDER; sàn `Hpce_Slab Thick Tag`: Thick / Thick+MIN (sàn hạ < −50 mm).
+- Logic hậu tố: có ở cả tầng này và tầng dưới → thường; chỉ từ tầng này lên → (o); chỉ ở tầng dưới → (u). Lan can PBS1/PC1/UPSTAND luôn (o), **1 tag cho cả chuỗi** (union-find đầu mút < 1 ft), đặt trên đoạn dài nhất.
+- Vật cản: tường = capsule (đường tim chia nhỏ, bán kính = nửa bề dày, tường tầng này + tầng dưới), cột = hộp bao, mép mặt trên sàn = đoạn bán kính 0; khe hở GAP 60 mm.
+- `place()`: tạo tag 1 lần → Regenerate → đo hộp chữ tương đối đầu tag → thử lần lượt vị trí ứng viên, lấy vị trí đầu tiên không va chạm, không có thì xóa tag. Ứng viên tường: t∈{0.5,0.35,0.65,0.2,0.8} × 2 phía × lệch 450/700/1000/1400; cột: 8 hướng × bán kính 650–1600; sàn: lưới điểm trong mặt trên.
+- Dim bề rộng dải sàn kiểu `2.5 MS GOTHIC INLNE`: cặp mép song song cách 600–2500 mm, chồng ≥1500 mm; reference lấy từ `get_Geometry(Options(ComputeReferences=True, View=v))` mặt phẳng trên (KHÔNG lấy face từ `GetGeometryObjectFromReference` — reference cạnh = None); trượt dọc dải {0.5,0.3,0.7,…} tới chỗ hộp chữ ước lượng 900×360 mm không chạm.
+- Thứ tự: tag tường → tag cột → dim → tag sàn. Chạy lại an toàn: xóa IndependentTag của view và dim kiểu trên trước khi đặt.
+
+**Mặt bằng móng (`annotate_footing.py`, theo tờ S200 "FOOTING MARKING PLAN"):**
+- Thứ tự: dim → tag móng → tag tường → tag cột. Tag móng `HPCE_Footing  Mark` (đọc Type Mark PF1…PF5, SF1 — đặt Type Mark cho loại móng trước) đặt TRONG móng sát góc (góc → giữa cạnh → tâm; móng băng SF1 rải dọc dải); tường, cột dùng tag thường (không o/u).
+- **Né chữ nền CAD:** link DWG xuất từ PDF có chữ là TEXT thật — Revit API KHÔNG đọc được (geometry của ImportInstance chỉ có nét/hatch, layer `PDF_Geometry`, `PDF_Solid Fills`). Lấy vị trí chữ từ chính tờ PDF:
+  ```bash
+  python <finishing>/run_code.py <finishing>/revit/export_columns.py "xuat cot" notx 'DOC_TITLE="Project1"'
+  python <finishing>/pdf_text_obstacles.py 18 "BUILDING A-GROUND FLOOR" %LOCALAPPDATA%/RevitMCPPython/text_S200.json
+  python <finishing>/annotate_views.py Project1 "BUILDING A - FOOTING MARKING PLAN" --text=%LOCALAPPDATA%/RevitMCPPython/text_S200.json
+  ```
+  `pdf_text_obstacles.py` hiệu chuẩn tờ PDF bằng cột (`column_calibration.calibrate_from_columns`, ghép theo tiết diện; S200: 39 cột, sai số 2,2 mm, xoay 270°) rồi quy hộp từng chữ về model. Không có `--text` thì script dùng nét ngắn của CAD (chỉ bắt được chữ đã nổ thành nét).
+- **Bỏ ngoài crop:** ứng viên tag/hộp chữ dim phải nằm trong `CropBox` (lề 100 mm) → tag của cấu kiện ngoài khung bị bỏ (`ngoai_crop`).
+- **Dim tim cột → mép móng (kiểu S200: 1750/2000/2200):** chỉ móng có cột LỆCH TÂM (>100 mm) hoặc nhiều cột: chuỗi mép–cột–…–cột–mép theo phương Hand/Facing của móng; móng 1 cột lệch tâm → dim tới mép GẦN. Tham chiếu: mặt tâm cột `CenterLeftRight/CenterFrontBack`; mép móng = **mặt bên thẳng đứng** của khối móng: móng đã join/cắt trả `Solid` trực tiếp (tọa độ model), móng thường trả `GeometryInstance` → `GetSymbolGeometry()` + `Transform`. KHÔNG dùng reference cạnh mặt trên từ `GetInstanceGeometry` (Revit đặt dim sai chỗ, ra 1198/1702… vô nghĩa), family `Hpce_PFx_Rectangular` không có ref Left/Right/Front/Back. **Sau khi tạo, so giá trị từng đoạn dim với khoảng cách hình học, lệch > 20 mm → xóa** (`dim_loi`).
+- 250793: mọi móng đơn trong model đang ĐÚNG TÂM cột (lệch 0–3 mm) trong khi S200 vẽ móng lệch tâm → chỉ ra 1 dim. Muốn đủ dim như S200 phải dời móng theo kích thước S200 trước.
+
+**Kiểm tra:** `export_view_png.py` (ImageExport FitToPage, PixelSize 5000) + `crop_png.py`; xem ảnh (phóng vùng có dim) trước khi gửi; báo số tag/dim/skip/ngoai_crop từng view.
+
+**Còn thiếu (làm tiếp khi được yêu cầu):**
+- Mặt bằng tầng (`annotate_marking.py`) chưa né chữ CAD/PDF và chưa bỏ tag ngoài crop — chép cách làm của `annotate_footing.py` (`TEXT_JSON`, `in_crop`).
+- Chưa thêm leader cho tag đặt xa > 1 m.
+
+**Bài học (250793):** đặt tag xong phải Regenerate mới đo được hộp chữ; mỗi view tầng ~50–90 tag mất 1–10 phút; LƯU sau mỗi view; KHÔNG gọi `CADLinkType.Reload/LoadFrom` qua MCP (Revit 2025 crash) — người dùng tự reload link CAD.
 
 ---
 
