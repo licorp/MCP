@@ -1,5 +1,5 @@
 # IronPython: mat bang mong (FOOTING MARKING PLAN, mau to S200) - tag + dim TRANH VA CHAM.
-# 1) dim tim cot -> mep mong (mong co cot lech tam / nhieu cot: chuoi mep-cot-...-cot-mep)
+# 1) dim mep mong -> MAT cot (kieu S201): cum mong >= 2 cot: 2 dau; mong 1 cot khong vuong: 1 dim theo phuong dai cot
 # 2) tag mong (Type Mark) trong goc mong, 3) tag tuong, 4) tag cot (tag thuong, khong o/u).
 # Vat can: tuong, cot, mep mong, net chu cua nen CAD (link DWG tu PDF: chu da no thanh net ngan < 350 mm), chu dim da dat.
 # Tag/dim nam ngoai crop cua view -> bo. VIEW_NAMES, DOC_TITLE chen boi run_code.py.
@@ -186,36 +186,21 @@ try:
         def blocked(r):
             return (not in_crop(r)) or rect_hit(r, segs, rects) or cad.hit(r)
 
-        # ================= 1) DIM tim cot -> mep mong =================
-        def col_ref(c, u):
-            """mat tham chieu tam cot vuong goc voi phuong u."""
-            for rt, ax in ((DB.FamilyInstanceReferenceType.CenterLeftRight, c.HandOrientation),
-                           (DB.FamilyInstanceReferenceType.CenterFrontBack, c.FacingOrientation)):
-                if abs(ax.DotProduct(u)) > 0.99:
-                    rf = list(c.GetReferences(rt))
-                    if rf: return rf[0]
-            return None
         def text_box(m, u, nn):
             hw, hh = 400 / FT, 330 / FT          # hop chu dim uoc luong 4 so (bao ca 2 phia duong dim)
             xs = [m.X + sx * hw * u.X + sy * hh * nn.X for sx in (-1, 1) for sy in (-1, 1)]
             ys = [m.Y + sx * hw * u.Y + sy * hh * nn.Y for sx in (-1, 1) for sy in (-1, 1)]
             return (min(xs), min(ys), max(xs), max(ys))
-        for f in fnds:
-            if not isinstance(f, DB.FamilyInstance) or not ffaces[f.Id.IntegerValue]: continue
-            face = ffaces[f.Id.IntegerValue][0]
-            o = f.Location.Point
-            inside = []
-            for c in cols:
-                p = c.Location.Point
-                pr = face.Project(DB.XYZ(p.X, p.Y, face.Origin.Z))
-                if pr is not None and pr.Distance < 0.01: inside.append(c)
-            if not inside: continue
-            # mep mong = MAT BEN (thang dung) cua khoi mong lay tu GetSymbolGeometry (reference on dinh cho dim
-            # family instance; reference canh tu GetInstanceGeometry bi Revit dat sai cho). Vi tri qua Transform.
-            sides = []
-            optS = DB.Options(); optS.ComputeReferences = True
-            for g in f.get_Geometry(optS):
-                if isinstance(g, DB.Solid):      # mong da join/cat: hinh hoc rieng cua instance, da o toa do model
+        # ================= 1) DIM mep mong -> MAT cot (kieu S201: 1750 = 2150 - 400) =================
+        # Cum mong (mong chong nhau / ghep) co >= 2 cot: dim 2 dau, mep ngoai cum -> mat cot gan nhat.
+        # Mong 1 cot, mong khong vuong (PF2, PF4...): 1 dim theo phuong dai cua cot. Mong vuong 1 cot dung tam: khong dim.
+        def side_faces(el):
+            """mat ben thang dung (normal, cac dinh, reference): Solid truc tiep (da join/cat) hoac GetSymbolGeometry + Transform.
+            KHONG dung reference canh tu GetInstanceGeometry (Revit dat dim sai cho)."""
+            out = []
+            opt_ = DB.Options(); opt_.ComputeReferences = True
+            for g in el.get_Geometry(opt_):
+                if isinstance(g, DB.Solid):
                     T, src = DB.Transform.Identity, [g]
                 elif isinstance(g, DB.GeometryInstance):
                     T, src = g.Transform, g.GetSymbolGeometry()
@@ -225,55 +210,109 @@ try:
                     if not isinstance(so, DB.Solid) or so.Volume <= 0: continue
                     for fc in so.Faces:
                         if isinstance(fc, DB.PlanarFace) and abs(fc.FaceNormal.Z) < 0.01 and fc.Reference is not None:
-                            sides.append((T.OfVector(fc.FaceNormal), T.OfPoint(fc.Origin), fc.Reference))
-            for u0 in (f.HandOrientation, f.FacingOrientation):
-                u = DB.XYZ(u0.X, u0.Y, 0).Normalize(); nn = DB.XYZ(-u.Y, u.X, 0)
-                pu = lambda p: (p - o).DotProduct(u)
-                pv = lambda p: (p - o).DotProduct(nn)
-                cs = sorted(inside, key=lambda c: pu(c.Location.Point))
-                cv_mean = sum(pv(c.Location.Point) for c in cs) / len(cs)
-                par_ = [(pu(org), rf) for nv, org, rf in sides if abs(nv.DotProduct(u)) > 0.999]
-                if len(par_) < 2: continue
-                en = min(par_, key=lambda x: x[0]); ep = max(par_, key=lambda x: x[0])
-                stops = []         # tim cot theo u (gop cot cung tim)
-                for c in cs:
-                    t_ = pu(c.Location.Point)
-                    if stops and abs(t_ - stops[-1][0]) < 50 / FT: continue
-                    rf = col_ref(c, u)
-                    if rf is None: stops = None; break
-                    stops.append((t_, rf))
-                if not stops: continue
-                if len(stops) == 1:
-                    dn_, dp_ = stops[0][0] - en[0], ep[0] - stops[0][0]
-                    if abs(dn_ - dp_) < 100 / FT: continue          # cot dung tam -> khong dim
-                    chain = [en, stops[0]] if dn_ < dp_ else [stops[0], ep]
+                            P = [T.OfPoint(p) for lp in fc.EdgeLoops for e in lp for p in (e.AsCurve().GetEndPoint(0),)]
+                            out.append((T.OfVector(fc.FaceNormal), P, fc.Reference))
+            return out
+        pads = [f for f in fnds if isinstance(f, DB.FamilyInstance) and ffaces[f.Id.IntegerValue]]
+        pin = {}
+        for f in pads:
+            face = ffaces[f.Id.IntegerValue][0]; lst = []
+            for c in cols:
+                p = c.Location.Point
+                pr = face.Project(DB.XYZ(p.X, p.Y, face.Origin.Z))
+                if pr is not None and pr.Distance < 0.01: lst.append(c)
+            pin[f.Id.IntegerValue] = lst
+        pads = [f for f in pads if pin[f.Id.IntegerValue]]
+        # cum mong: hop bao chong nhau > 50 mm
+        par = dict((f.Id.IntegerValue, f.Id.IntegerValue) for f in pads)
+        def fnd(i):
+            while par[i] != i: par[i] = par[par[i]]; i = par[i]
+            return i
+        bbs = dict((f.Id.IntegerValue, f.get_BoundingBox(None)) for f in pads)
+        for i1, a in enumerate(pads):
+            A_ = bbs[a.Id.IntegerValue]
+            for b in pads[i1 + 1:]:
+                B_ = bbs[b.Id.IntegerValue]; ov = 50 / FT
+                if min(A_.Max.X, B_.Max.X) - max(A_.Min.X, B_.Min.X) > ov and min(A_.Max.Y, B_.Max.Y) - max(A_.Min.Y, B_.Min.Y) > ov:
+                    par[fnd(a.Id.IntegerValue)] = fnd(b.Id.IntegerValue)
+        groups = {}
+        for f in pads: groups.setdefault(fnd(f.Id.IntegerValue), []).append(f)
+        sf_cache = {}
+        def sfaces(el):
+            k = el.Id.IntegerValue
+            if k not in sf_cache: sf_cache[k] = side_faces(el)
+            return sf_cache[k]
+        for gp in groups.values():
+            gcols = {}
+            for f in gp:
+                for c in pin[f.Id.IntegerValue]: gcols[c.Id.IntegerValue] = c
+            gcols = list(gcols.values())
+            f0 = gp[0]; o = f0.Location.Point
+            axes = [DB.XYZ(f0.HandOrientation.X, f0.HandOrientation.Y, 0).Normalize(), DB.XYZ(f0.FacingOrientation.X, f0.FacingOrientation.Y, 0).Normalize()]
+            def span(pts, u):
+                s = [(p - o).DotProduct(u) for p in pts]; return min(s), max(s)
+            if len(gcols) >= 2:
+                d_ = gcols[-1].Location.Point - gcols[0].Location.Point
+                u = max(axes, key=lambda a: abs(a.DotProduct(DB.XYZ(d_.X, d_.Y, 0))))
+                ends = ("neg", "pos")
+            else:
+                c = gcols[0]
+                cf = sfaces(c)
+                ext = []
+                for a in axes:
+                    P = [p for nv, pts, rf in cf for p in pts]
+                    lo, hi = span(P, a) if P else (0, 0); ext.append(hi - lo)
+                u = axes[0] if ext[0] >= ext[1] else axes[1]                       # phuong dai cua cot
+                gP = [p for f in gp for nv, pts, rf in sfaces(f) for p in pts]
+                lo_u, hi_u = span(gP, u); lo_v, hi_v = span(gP, DB.XYZ(-u.Y, u.X, 0))
+                if abs((hi_u - lo_u) - (hi_v - lo_v)) < 200 / FT and len(gp) == 1: continue   # mong vuong 1 cot dung tam
+                ends = ("pos", "neg")                                              # 1 dim, thu phia + truoc
+            nn = DB.XYZ(-u.Y, u.X, 0)
+            pu = lambda p: (p - o).DotProduct(u)
+            pv = lambda p: (p - o).DotProduct(nn)
+            cs = sorted(gcols, key=lambda c: pu(c.Location.Point))
+            placed_one = False
+            for end in ends:
+                if placed_one and len(gcols) == 1: break
+                ce = cs[0] if end == "neg" else cs[-1]
+                cv = pv(ce.Location.Point)
+                # mep mong: mat ben vuong goc u, phu qua duong tim cot, cuc tri ve phia end
+                cand = []
+                for f in gp:
+                    for nv, pts, rf in sfaces(f):
+                        if abs(nv.DotProduct(u)) < 0.999: continue
+                        vs = [pv(p) for p in pts]
+                        if min(vs) - 0.03 <= cv <= max(vs) + 0.03: cand.append((sum(pu(p) for p in pts) / len(pts), rf))
+                cfs = [(sum(pu(p) for p in pts) / len(pts), rf) for nv, pts, rf in sfaces(ce) if abs(nv.DotProduct(u)) > 0.999]
+                if not cand or len(cfs) < 2: n["skip"] += 1; continue
+                if end == "neg":
+                    edge = min(cand, key=lambda x: x[0]); cface = min(cfs, key=lambda x: x[0])
+                    chain = [edge, cface]
                 else:
-                    chain = [en] + stops + [ep]
-                want = [chain[k + 1][0] - chain[k][0] for k in range(len(chain) - 1)]
+                    edge = max(cand, key=lambda x: x[0]); cface = max(cfs, key=lambda x: x[0])
+                    chain = [cface, edge]
+                want = chain[1][0] - chain[0][0]
+                if want < 100 / FT: continue
                 done = False
-                for off in (0, 450, -450, 900, -900, 1300, -1300, 1800, -1800, 2300, -2300):
-                    base = o + nn * (cv_mean + off / FT)
-                    A = base + u * chain[0][0]; B = base + u * chain[-1][0]
+                for off in (0, 450, -450, 900, -900, 1300, -1300):
+                    base = o + nn * (cv + off / FT)
+                    A = base + u * chain[0][0]; B = base + u * chain[1][0]
                     A = DB.XYZ(A.X, A.Y, z); B = DB.XYZ(B.X, B.Y, z)
-                    boxes = []
-                    for k in range(len(chain) - 1):
-                        m = base + u * ((chain[k][0] + chain[k + 1][0]) / 2.0)
-                        boxes.append(text_box(DB.XYZ(m.X, m.Y, z), u, nn))
-                    if any(blocked(r) for r in boxes): continue
-                    ra = DB.ReferenceArray()
-                    for _, rf in chain: ra.Append(rf)
+                    m = (A + B) * 0.5
+                    box = text_box(m, u, nn)
+                    if blocked(box): continue
+                    ra = DB.ReferenceArray(); ra.Append(chain[0][1]); ra.Append(chain[1][1])
                     try:
                         dm = doc.Create.NewDimension(v, DB.Line.CreateBound(A, B), ra, dt)
                     except Exception:
                         n["dim_loi"] += 1; break
-                    got = [dm.Value] if dm.NumberOfSegments == 0 else [s.Value for s in dm.Segments]
-                    if len(got) != len(want) or any(abs((g or 0) - w) > 20 / FT for g, w in zip(got, want)):
-                        doc.Delete(dm.Id); n["dim_loi"] += 1; break      # dim khong khop hinh hoc -> bo
-                    for r in boxes: rects.append(r)
-                    segs.append(((A.X, A.Y), (B.X, B.Y), 0.0))
-                    n["dim"] += 1; done = True
+                    if dm.Value is None or abs(dm.Value - want) > 20 / FT:
+                        doc.Delete(dm.Id); n["dim_loi"] += 1; break          # dim khong khop hinh hoc -> bo
+                    rects.append(box); segs.append(((A.X, A.Y), (B.X, B.Y), 0.0))
+                    n["dim"] += 1; done = True; placed_one = True
                     break
-                if not done: n["skip"] += 1
+                if not done and len(gcols) >= 2: n["skip"] += 1
+            if len(gcols) == 1 and not placed_one: n["skip"] += 1
 
         def place(elem, ttype, cands):
             cands = [p for p in cands if in_crop_pt(p.X, p.Y)]

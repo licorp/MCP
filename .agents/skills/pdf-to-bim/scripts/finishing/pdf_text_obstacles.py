@@ -22,10 +22,8 @@ from finishing_config import PDF  # noqa: E402
 FT = 304.8
 
 
-def main():
-    page_no, level, out = int(sys.argv[1]), sys.argv[2], sys.argv[3]
-    pdf = sys.argv[4] if len(sys.argv) > 4 else PDF
-    page = fitz.open(pdf)[page_no]
+def sheet_transform(page, level):
+    """hieu chuan to PDF -> model (mm) bang cot o level chan `level` (columns.json tu revit/export_columns.py)."""
     scale = drawing_scale_from_text(page) or 100
     cols = json.load(open(os.path.join(os.environ["LOCALAPPDATA"], "RevitMCPPython", "columns.json")))
     cols = [c for c in cols if c["level"] == level]
@@ -35,6 +33,14 @@ def main():
         print("KHONG HIEU CHUAN DUOC", {k: v for k, v in cal.items() if k != "pairs"})
         sys.exit(1)
     tf = AffineTransformer(cal["pdf_grid_pt1"], cal["pdf_grid_pt2"], cal["revit_grid_pt1_mm"], cal["revit_grid_pt2_mm"])
+    return tf, cal, scale
+
+
+def main():
+    page_no, level, out = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+    pdf = sys.argv[4] if len(sys.argv) > 4 else PDF
+    page = fitz.open(pdf)[page_no]
+    tf, cal, _ = sheet_transform(page, level)
     rects = []
     for w in page.get_text("words"):
         x0, y0, x1, y1 = w[:4]

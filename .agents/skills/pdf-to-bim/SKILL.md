@@ -268,7 +268,7 @@ Chạy từ gốc repo: `python <finishing>/<script>.py` (CPython) và `python <
 - `IronPython`: ghi file bằng `with open` (không thì JSON bị cắt), không dùng list-comprehension có `print`.
 
 ### Phase 8: Tag + Dim mặt bằng marking plan tránh va chạm (Annotation)
-Script: `scripts/finishing/annotate_views.py` (CPython điều phối) + `revit/annotate_marking.py`, `revit/annotate_footing.py`, `revit/prep_marking_views.py`, `revit/export_view_png.py`, `revit/export_columns.py`, `crop_png.py`, `pdf_text_obstacles.py`.
+Script: `scripts/finishing/annotate_views.py` (CPython điều phối) + `revit/annotate_marking.py`, `revit/annotate_footing.py`, `revit/prep_marking_views.py`, `revit/export_view_png.py`, `revit/export_columns.py`, `revit/export_pads.py`, `crop_png.py`, `pdf_text_obstacles.py`, `pad_shift_plan.py`.
 
 **Chạy (1 lệnh, lưu sau mỗi view, xuất ảnh đã cắt viền vào `.agents/cache/marking/`):**
 ```bash
@@ -288,18 +288,19 @@ python .agents/skills/pdf-to-bim/scripts/finishing/annotate_views.py Project1 "B
 - Dim bề rộng dải sàn kiểu `2.5 MS GOTHIC INLNE`: cặp mép song song cách 600–2500 mm, chồng ≥1500 mm; reference lấy từ `get_Geometry(Options(ComputeReferences=True, View=v))` mặt phẳng trên (KHÔNG lấy face từ `GetGeometryObjectFromReference` — reference cạnh = None); trượt dọc dải {0.5,0.3,0.7,…} tới chỗ hộp chữ ước lượng 900×360 mm không chạm.
 - Thứ tự: tag tường → tag cột → dim → tag sàn. Chạy lại an toàn: xóa IndependentTag của view và dim kiểu trên trước khi đặt.
 
-**Mặt bằng móng (`annotate_footing.py`, theo tờ S200 "FOOTING MARKING PLAN"):**
-- Thứ tự: dim → tag móng → tag tường → tag cột. Tag móng `HPCE_Footing  Mark` (đọc Type Mark PF1…PF5, SF1 — đặt Type Mark cho loại móng trước) đặt TRONG móng sát góc (góc → giữa cạnh → tâm; móng băng SF1 rải dọc dải); tường, cột dùng tag thường (không o/u).
+**Mặt bằng móng (`annotate_footing.py`, theo tờ S201 "FOOTING MARKING PLAN ZONE A"):**
+- Tờ mẫu 250793: trang PDF 18 (0-based) = S201 "FOOTING MARKING PLAN ZONE A". Thứ tự: dim → tag móng → tag tường → tag cột. Tag móng `HPCE_Footing  Mark` (đọc Type Mark PF1…PF5, SF1 — đặt Type Mark cho loại móng trước) đặt TRONG móng sát góc (góc → giữa cạnh → tâm; móng băng SF1 rải dọc dải); tường, cột dùng tag thường (không o/u).
 - **Né chữ nền CAD:** link DWG xuất từ PDF có chữ là TEXT thật — Revit API KHÔNG đọc được (geometry của ImportInstance chỉ có nét/hatch, layer `PDF_Geometry`, `PDF_Solid Fills`). Lấy vị trí chữ từ chính tờ PDF:
   ```bash
   python <finishing>/run_code.py <finishing>/revit/export_columns.py "xuat cot" notx 'DOC_TITLE="Project1"'
-  python <finishing>/pdf_text_obstacles.py 18 "BUILDING A-GROUND FLOOR" %LOCALAPPDATA%/RevitMCPPython/text_S200.json
-  python <finishing>/annotate_views.py Project1 "BUILDING A - FOOTING MARKING PLAN" --text=%LOCALAPPDATA%/RevitMCPPython/text_S200.json
+  python <finishing>/pdf_text_obstacles.py 18 "BUILDING A-GROUND FLOOR" %LOCALAPPDATA%/RevitMCPPython/text_S201.json
+  python <finishing>/annotate_views.py Project1 "BUILDING A - FOOTING MARKING PLAN" --text=%LOCALAPPDATA%/RevitMCPPython/text_S201.json
   ```
-  `pdf_text_obstacles.py` hiệu chuẩn tờ PDF bằng cột (`column_calibration.calibrate_from_columns`, ghép theo tiết diện; S200: 39 cột, sai số 2,2 mm, xoay 270°) rồi quy hộp từng chữ về model. Không có `--text` thì script dùng nét ngắn của CAD (chỉ bắt được chữ đã nổ thành nét).
+  `pdf_text_obstacles.py` hiệu chuẩn tờ PDF bằng cột (`column_calibration.calibrate_from_columns`, ghép theo tiết diện; S201: 39 cột, sai số 2,2 mm, xoay 270°) rồi quy hộp từng chữ về model. Không có `--text` thì script dùng nét ngắn của CAD (chỉ bắt được chữ đã nổ thành nét).
 - **Bỏ ngoài crop:** ứng viên tag/hộp chữ dim phải nằm trong `CropBox` (lề 100 mm) → tag của cấu kiện ngoài khung bị bỏ (`ngoai_crop`).
-- **Dim tim cột → mép móng (kiểu S200: 1750/2000/2200):** chỉ móng có cột LỆCH TÂM (>100 mm) hoặc nhiều cột: chuỗi mép–cột–…–cột–mép theo phương Hand/Facing của móng; móng 1 cột lệch tâm → dim tới mép GẦN. Tham chiếu: mặt tâm cột `CenterLeftRight/CenterFrontBack`; mép móng = **mặt bên thẳng đứng** của khối móng: móng đã join/cắt trả `Solid` trực tiếp (tọa độ model), móng thường trả `GeometryInstance` → `GetSymbolGeometry()` + `Transform`. KHÔNG dùng reference cạnh mặt trên từ `GetInstanceGeometry` (Revit đặt dim sai chỗ, ra 1198/1702… vô nghĩa), family `Hpce_PFx_Rectangular` không có ref Left/Right/Front/Back. **Sau khi tạo, so giá trị từng đoạn dim với khoảng cách hình học, lệch > 20 mm → xóa** (`dim_loi`).
-- 250793: mọi móng đơn trong model đang ĐÚNG TÂM cột (lệch 0–3 mm) trong khi S200 vẽ móng lệch tâm → chỉ ra 1 dim. Muốn đủ dim như S200 phải dời móng theo kích thước S200 trước.
+- **Dim mép móng → MẶT cột (kiểu S201: 1750/2000/2200):** con số trên bản vẽ là từ mép móng tới **mặt** cột (PF3 4300: 2150 − 400 = 1750; PF2 4800: 2400 − 400 = 2000; PF4 5200: 2600 − 400 = 2200), móng ĐÚNG TÂM cột — KHÔNG đọc thành móng lệch tâm. Quy tắc: cụm móng (móng chồng nhau, hộp bao chồng > 50 mm) có ≥ 2 cột → dim 2 đầu, mép ngoài cụm → mặt cột gần nhất, theo phương nối các cột; móng 1 cột không vuông (PF2, PF4…) → 1 dim theo phương dài của cột; móng vuông 1 cột → không dim.
+  Tham chiếu: **mặt bên thẳng đứng** của móng và của cột: phần tử đã join/cắt trả `Solid` trực tiếp (tọa độ model), phần tử thường trả `GeometryInstance` → `GetSymbolGeometry()` + `Transform`. KHÔNG dùng reference cạnh mặt trên lấy từ `GetInstanceGeometry` (Revit đặt dim sai chỗ, ra 1198/1702… vô nghĩa); family `Hpce_PFx_Rectangular` không có ref Left/Right/Front/Back. **Tạo xong so `Dimension.Value` với khoảng cách hình học, lệch > 20 mm → xóa** (`dim_loi`).
+- **Kiểm tra vị trí móng so với tờ PDF** trước khi kết luận lệch: `revit/export_pads.py` (VIEW_NAMES = view móng) + `pad_shift_plan.py <trang> "<level>"` — móng trên tờ vẽ bằng NÉT ĐƠN dày 0,48 (không phải hình chữ nhật khép kín); theo từng trục Hand/Facing tìm cặp nét cách đúng kích thước danh định (tên loại `PF3 - 4300x4300x750D`, ±30 mm) có cột ở giữa, gần vị trí hiện tại nhất → `pad_shift.json` (móng cần dời > 50 mm) + ảnh `.agents/cache/pad_shift_p<trang>.png` (đỏ đứt = hiện tại, xanh = đề xuất). 250793 zone A: 0/35 móng cần dời.
 
 **Kiểm tra:** `export_view_png.py` (ImageExport FitToPage, PixelSize 5000) + `crop_png.py`; xem ảnh (phóng vùng có dim) trước khi gửi; báo số tag/dim/skip/ngoai_crop từng view.
 
